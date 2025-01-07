@@ -1,5 +1,5 @@
 import { Plugin } from 'obsidian';
-import { TaskBoardView, VIEW_TYPE_TASK_BOARD } from './taskBoard';
+import { TaskBoardView, VIEW_TYPE_TASK_BOARD } from './src/taskBoard';
 
 export default class TaskBoardPlugin extends Plugin {
     async onload() {
@@ -20,6 +20,13 @@ export default class TaskBoardPlugin extends Plugin {
             name: '打开任务积分板',
             callback: () => {
                 this.activateView();
+            }
+        });
+
+        // 确保daily文件夹存在
+        this.app.vault.adapter.exists('daily').then(exists => {
+            if (!exists) {
+                this.app.vault.createFolder('daily');
             }
         });
     }

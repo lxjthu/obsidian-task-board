@@ -1,4 +1,5 @@
-import { ItemView, WorkspaceLeaf, App, Modal, Setting, Notice } from 'obsidian';
+import moment from 'moment';
+import { ItemView, WorkspaceLeaf, App, Modal, Setting, Notice, TFile } from 'obsidian';
 
 export const VIEW_TYPE_TASK_BOARD = 'task-points-board-view';
 
@@ -23,11 +24,54 @@ interface TaskBoardData {
     rewardItems: any[];
     currentUserId: string;
     timers: {[key: string]: number};
+    completions: TaskCompletion[];
+}
+
+// 定义任务完成记录的接口
+interface TaskCompletion {
+    taskName: string;
+    reflection: string;
+    timestamp: number;
+}
+
+// 创建反思对话框
+class ReflectionModal extends Modal {
+    reflection: string;
+    onSubmit: (reflection: string) => void;
+
+    constructor(app: App, onSubmit: (reflection: string) => void) {
+        super(app);
+        this.onSubmit = onSubmit;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.createEl("h2", { text: "完成心得" });
+
+        const textArea = contentEl.createEl("textarea", {
+            attr: { rows: "6", style: "width: 100%;" }
+        });
+
+        const buttonDiv = contentEl.createEl("div", {
+            attr: { style: "display: flex; justify-content: flex-end; margin-top: 1em;" }
+        });
+
+        buttonDiv.createEl("button", { text: "提交" }).onclick = () => {
+            this.onSubmit(textArea.value);
+            this.close();
+        };
+    }
+
+    onClose() {
+        const { contentEl } = this;
+        contentEl.empty();
+    }
 }
 
 export class TaskBoardView extends ItemView {
     contentEl: HTMLElement;
     private data: TaskBoardData;
+    private completions: TaskCompletion[] = [];
 
     constructor(leaf: WorkspaceLeaf) {
         super(leaf);
@@ -36,7 +80,8 @@ export class TaskBoardView extends ItemView {
             tasks: [],
             rewardItems: [],
             currentUserId: '',
-            timers: {}
+            timers: {},
+            completions: []
         };
     }
 
@@ -51,6 +96,9 @@ export class TaskBoardView extends ItemView {
     async onOpen() {
         // 加载保存的数据
         await this.loadData();
+        
+        // 从加载的数据中恢复 completions
+        this.completions = this.data.completions || [];
 
         // 创建界面
         this.contentEl = this.containerEl.children[1] as HTMLElement;
@@ -63,6 +111,13 @@ export class TaskBoardView extends ItemView {
         this.createTaskSection();
         this.createStatsSection();
         this.createRewardSection();
+
+        // 添加今日总结按钮
+        const summaryButton = this.containerEl.createEl("button", {
+            text: "今日总结",
+            attr: { style: "margin-top: 1em;" }
+        });
+        summaryButton.onclick = () => this.createDailySummary();
     }
 
     private createHeader() {
@@ -340,6 +395,10 @@ export class TaskBoardView extends ItemView {
         
         // 保存数据
         await this.saveData();
+        
+        // 保存 completions 到数据
+        this.data.completions = this.completions;
+        await this.saveData();
     }
 
     async loadData() {
@@ -391,41 +450,43 @@ export class TaskBoardView extends ItemView {
     private async toggleTask(taskId: string) {
         const task = this.data.tasks.find(t => t.id === taskId);
         if (task) {
-            task.completed = !task.completed;
-            if (task.completed) {
-                // 完成任务时的处理
-                task.completedBy = this.data.currentUserId;
-                task.completedAt = Date.now();
-                
-                // 如果任务正在计时，停止计时
-                if (task.isTimerRunning) {
-                    const now = Date.now();
-                    const elapsed = Math.floor((now - (task.timerStartTime || now)) / 1000);
-                    task.timeSpent += elapsed;
-                    task.isTimerRunning = false;
+            if (!task.completed) {
+                // 先弹出反思对话框
+                new ReflectionModal(this.app, async (reflection) => {
+                    // 在用户提交反思后再标记任务为完成
+                    task.completed = true;
+                    task.completedBy = this.data.currentUserId;
+                    task.completedAt = Date.now();
                     
-                    // 清除计时器
-                    if (this.data.timers[taskId]) {
-                        clearInterval(this.data.timers[taskId]);
-                        delete this.data.timers[taskId];
-                    }
-                }
+                    // 添加到完成记录
+                    this.completions.push({
+                        taskName: task.title,
+                        reflection: reflection,
+                        timestamp: Date.now()
+                    });
+
+                    // 保存数据
+                    await this.saveData();
+                    
+                    // 更新界面
+                    this.renderTasks(this.contentEl.querySelector('.task-list') as HTMLElement);
+                    this.createStatsSection();
+                    
+                    new Notice("任务完成！");
+                }).open();
             } else {
                 // 取消完成时的处理
+                task.completed = false;
                 delete task.completedBy;
                 delete task.completedAt;
-                // 重置计时相关数据，允许重新开始
-                task.timeSpent = 0;
-                task.isTimerRunning = false;
-                delete task.timerStartTime;
-                delete task.startedAt;  // 清除开始时间，允许记录新的开始时间
+                
+                // 不再从完成记录中移除
+                // this.completions = this.completions.filter(c => c.taskName !== task.title);
+                
+                await this.saveData();
+                this.renderTasks(this.contentEl.querySelector('.task-list') as HTMLElement);
+                this.createStatsSection();
             }
-            
-            await this.saveData();
-            
-            // 更新界面
-            this.renderTasks(this.contentEl.querySelector('.task-list') as HTMLElement);
-            this.createStatsSection();
         }
     }
 
@@ -457,53 +518,28 @@ export class TaskBoardView extends ItemView {
         return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
     }
 
-    private async createDailySummary() {
-        // 获取今天的日期
-        const today = new Date();
-        const dateStr = today.toISOString().split('T')[0];
-        
-        // 获取今天完成的任务
-        const todayTasks = this.data.tasks.filter(task => {
-            if (!task.completed || !task.completedAt) return false;
-            const completedDate = new Date(task.completedAt).toISOString().split('T')[0];
-            return completedDate === dateStr;
-        });
+    // 处理任务完成
+    private async handleTaskCompletion(taskName: string) {
+        new ReflectionModal(this.app, async (reflection) => {
+            this.completions.push({
+                taskName,
+                reflection,
+                timestamp: Date.now()
+            });
+            new Notice("已记录完成心得！");
+        }).open();
+    }
 
-        if (todayTasks.length === 0) {
-            new Notice('今天还没有完成任何任务！');
+    // 创建今日总结
+    private async createDailySummary() {
+        if (this.completions.length === 0) {
+            new Notice("今天还没有完成任何任务！");
             return;
         }
 
-        // 生成总结内容
-        const summaryContent = [
-            '## 今日任务总结',
-            '',
-            '### 已完成任务',
-            ''
-        ];
-
-        // 计算总时间和总积分
-        let totalTime = 0;
-        let totalPoints = 0;
-
-        // 添加每个任务的详细信息
-        todayTasks.forEach(task => {
-            totalTime += task.timeSpent;
-            totalPoints += task.points;
-            
-            summaryContent.push(`#### ${task.title} (${task.points}分)`);
-            summaryContent.push(`- 开始时间：${this.formatDate(task.startedAt || task.timerStartTime)}`);
-            summaryContent.push(`- 完成时间：${this.formatDate(task.completedAt)}`);
-            summaryContent.push(`- 用时：${this.formatTime(task.timeSpent)}`);
-            summaryContent.push('');
-        });
-
-        // 添加总结信息
-        summaryContent.push('### 总结');
-        summaryContent.push(`- 完成任务数：${todayTasks.length}`);
-        summaryContent.push(`- 总计用时：${this.formatTime(totalTime)}`);
-        summaryContent.push(`- 总计积分：${totalPoints}`);
-        summaryContent.push('');
+        // 生成日期字符串
+        const dateStr = moment().format('YYYY-MM-DD');
+        const summaryContent = this.generateSummaryContent();
 
         // 获取或创建今天的日记文件
         const dailyNotePath = `日记/${dateStr}.md`;
@@ -517,14 +553,29 @@ export class TaskBoardView extends ItemView {
             // 写入内容
             await this.app.vault.adapter.write(
                 dailyNotePath,
-                existingContent + summaryContent.join('\n')
+                existingContent + summaryContent
             );
 
             new Notice('今日总结已添加到日记！');
+            this.completions = []; // 清空完成记录
+            await this.saveData();
         } catch (error) {
             new Notice('写入日记失败！请确保日记文件夹存在。');
             console.error('Failed to write daily note:', error);
         }
+    }
+
+    private generateSummaryContent(): string {
+        const now = new Date();
+        let content = `## 今日任务总结 (${now.toLocaleTimeString()})\n\n`;
+
+        this.completions.forEach(({ taskName, reflection, timestamp }) => {
+            const time = new Date(timestamp).toLocaleTimeString();
+            content += `### ${taskName} (${time})\n`;
+            content += `- 完成心得：${reflection}\n\n`;
+        });
+
+        return content;
     }
 }
 
