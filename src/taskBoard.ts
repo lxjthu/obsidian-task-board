@@ -32,11 +32,14 @@ interface TaskCompletion {
     taskName: string;
     reflection: string;
     timestamp: number;
+    startedAt?: number;
+    completedAt: number;
+    timeSpent: number;
 }
 
 // 创建反思对话框
 class ReflectionModal extends Modal {
-    reflection: string;
+    reflection: string = ''; // 初始化反思内容
     onSubmit: (reflection: string) => void;
 
     constructor(app: App, onSubmit: (reflection: string) => void) {
@@ -46,20 +49,41 @@ class ReflectionModal extends Modal {
 
     onOpen() {
         const { contentEl } = this;
+        contentEl.empty();
+        
         contentEl.createEl("h2", { text: "完成心得" });
 
+        // 创建文本区域并添加输入事件
         const textArea = contentEl.createEl("textarea", {
-            attr: { rows: "6", style: "width: 100%;" }
+            attr: { 
+                rows: "6",
+                style: "width: 100%; margin-bottom: 1em;"
+            }
+        });
+        
+        // 添加输入事件监听
+        textArea.addEventListener('input', (e) => {
+            this.reflection = (e.target as HTMLTextAreaElement).value;
         });
 
         const buttonDiv = contentEl.createEl("div", {
-            attr: { style: "display: flex; justify-content: flex-end; margin-top: 1em;" }
+            attr: { style: "display: flex; justify-content: flex-end; gap: 8px;" }
         });
 
-        buttonDiv.createEl("button", { text: "提交" }).onclick = () => {
-            this.onSubmit(textArea.value);
-            this.close();
-        };
+        // 添加取消按钮
+        const cancelBtn = buttonDiv.createEl("button", { text: "取消" });
+        cancelBtn.addEventListener('click', () => this.close());
+
+        // 添加提交按钮
+        const submitBtn = buttonDiv.createEl("button", { text: "提交" });
+        submitBtn.addEventListener('click', () => {
+            if (this.reflection.trim()) {
+                this.onSubmit(this.reflection);
+                this.close();
+            } else {
+                new Notice('请输入完成心得');
+            }
+        });
     }
 
     onClose() {
@@ -281,69 +305,82 @@ export class TaskBoardView extends ItemView {
         // 标题和按钮容器
         const headerContainer = statsSection.createEl('div', { cls: 'stats-header' });
         headerContainer.createEl('h3', { text: '任务完成记录' });
-        
-        // 按钮容器
-        const btnContainer = headerContainer.createEl('div', { cls: 'stats-header-buttons' });
-        
-        // 今日总结按钮
-        const summaryBtn = btnContainer.createEl('button', {
+
+        // 添加按钮容器
+        const buttonsContainer = headerContainer.createEl('div', { cls: 'stats-header-buttons' });
+
+        // 添加今日总结按钮
+        const summaryButton = buttonsContainer.createEl('button', {
             text: '今日总结',
             cls: 'summary-btn'
         });
-        summaryBtn.addEventListener('click', () => this.createDailySummary());
-        
-        // 清空记录按钮
-        const clearAllBtn = btnContainer.createEl('button', {
+        summaryButton.addEventListener('click', () => this.createDailySummary());
+
+        // 添加清空按钮
+        const clearButton = buttonsContainer.createEl('button', {
             text: '清空记录',
             cls: 'clear-records-btn'
         });
-        clearAllBtn.addEventListener('click', () => this.clearCompletedTasks());
+        clearButton.addEventListener('click', () => this.clearAllCompletions());
 
-        // 获取已完成的任务并按完成时间排序
-        const completedTasks = this.data.tasks
-            .filter(t => t.completed)
-            .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
-
-        if (completedTasks.length === 0) {
+        if (this.completions.length === 0) {
             statsSection.createEl('div', { 
-                text: '暂无已完成任务',
+                text: '暂无完成记录',
                 cls: 'no-tasks'
             });
             return;
         }
 
-        // 创建任务记录列表
+        // 创建记录列表
         const recordList = statsSection.createEl('div', { cls: 'task-record-list' });
         
-        completedTasks.forEach(task => {
+        this.completions.forEach(completion => {
             const recordItem = recordList.createEl('div', { cls: 'task-record-item' });
             
             // 记录内容容器
             const contentContainer = recordItem.createEl('div', { cls: 'record-content' });
+            
+            // 找到对应的任务以获取更多信息
+            const task = this.data.tasks.find(t => t.title === completion.taskName);
+            
             contentContainer.createEl('div', { 
-                text: `📝 ${task.title} (${task.points}分)`,
+                text: `📝 ${completion.taskName} (${task?.points || 0}分)`,
                 cls: 'task-record-title'
             });
             contentContainer.createEl('div', { 
-                text: `⏰ 开始：${this.formatDate(task.startedAt || task.timerStartTime)}`,
+                text: `⏰ 开始时间：${this.formatDate(completion.startedAt)}`,
                 cls: 'task-record-time'
             });
             contentContainer.createEl('div', { 
-                text: `🏁 完成：${this.formatDate(task.completedAt)}`,
+                text: `⏰ 完成时间：${this.formatDate(completion.completedAt)}`,
                 cls: 'task-record-time'
             });
             contentContainer.createEl('div', { 
-                text: `⌛ 用时：${this.formatTime(task.timeSpent)}`,
+                text: `⌛ 实际用时：${this.formatTime(completion.timeSpent)}`,
                 cls: 'task-record-time'
             });
-            
-            // 删除按钮
+            contentContainer.createEl('div', { 
+                text: `💭 完成心得：${completion.reflection}`,
+                cls: 'task-record-reflection'
+            });
+
+            // 添加删除按钮
             const deleteBtn = recordItem.createEl('button', {
                 text: '删除',
-                cls: 'record-delete-btn'
+                cls: 'task-record-delete'
             });
-            deleteBtn.addEventListener('click', () => this.deleteCompletedTask(task.id));
+            deleteBtn.addEventListener('click', () => this.deleteCompletion(completion));
         });
+    }
+
+    private async deleteCompletion(completion: TaskCompletion) {
+        this.completions = this.completions.filter(c => 
+            c.taskName !== completion.taskName || 
+            c.timestamp !== completion.timestamp
+        );
+        await this.saveData();
+        this.createStatsSection();
+        new Notice('已删除完成记录');
     }
 
     private async clearCompletedTasks() {
@@ -451,24 +488,21 @@ export class TaskBoardView extends ItemView {
         const task = this.data.tasks.find(t => t.id === taskId);
         if (task) {
             if (!task.completed) {
-                // 先弹出反思对话框
                 new ReflectionModal(this.app, async (reflection) => {
-                    // 在用户提交反思后再标记任务为完成
                     task.completed = true;
                     task.completedBy = this.data.currentUserId;
                     task.completedAt = Date.now();
                     
-                    // 添加到完成记录
                     this.completions.push({
                         taskName: task.title,
                         reflection: reflection,
-                        timestamp: Date.now()
+                        timestamp: Date.now(),
+                        startedAt: task.startedAt,
+                        completedAt: Date.now(),
+                        timeSpent: task.timeSpent
                     });
 
-                    // 保存数据
                     await this.saveData();
-                    
-                    // 更新界面
                     this.renderTasks(this.contentEl.querySelector('.task-list') as HTMLElement);
                     this.createStatsSection();
                     
@@ -524,7 +558,10 @@ export class TaskBoardView extends ItemView {
             this.completions.push({
                 taskName,
                 reflection,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                startedAt: undefined,
+                completedAt: Date.now(),
+                timeSpent: 0
             });
             new Notice("已记录完成心得！");
         }).open();
@@ -570,12 +607,34 @@ export class TaskBoardView extends ItemView {
         let content = `## 今日任务总结 (${now.toLocaleTimeString()})\n\n`;
 
         this.completions.forEach(({ taskName, reflection, timestamp }) => {
+            // 找到对应的任务以获取详细信息
+            const task = this.data.tasks.find(t => t.title === taskName);
             const time = new Date(timestamp).toLocaleTimeString();
-            content += `### ${taskName} (${time})\n`;
+            
+            content += `### ${taskName} (${task?.points || 0}分)\n`;
+            content += `- 开始时间：${this.formatDate(task?.startedAt)}\n`;
+            content += `- 完成时间：${this.formatDate(task?.completedAt)}\n`;
+            content += `- 总用时：${this.formatTime(task?.timeSpent || 0)}\n`;
             content += `- 完成心得：${reflection}\n\n`;
         });
 
         return content;
+    }
+
+    // 添加清空所有完成记录的方法
+    private async clearAllCompletions() {
+        // 添加确认对话框
+        if (this.completions.length > 0) {
+            const confirmed = confirm('确定要清空所有完成记录吗？此操作不可撤销。');
+            if (confirmed) {
+                this.completions = [];
+                await this.saveData();
+                this.createStatsSection();
+                new Notice('已清空所有完成记录');
+            }
+        } else {
+            new Notice('没有可清空的记录');
+        }
     }
 }
 
