@@ -3,21 +3,21 @@ import { TaskBoardView, VIEW_TYPE_TASK_BOARD } from './src/taskBoard';
 
 export default class TaskBoardPlugin extends Plugin {
     async onload() {
-        // 注册视图类型
+        // 确保视图类型匹配
         this.registerView(
             VIEW_TYPE_TASK_BOARD,
             (leaf) => new TaskBoardView(leaf)
         );
 
         // 添加功能区图标
-        this.addRibbonIcon('check-square', '任务积分板', () => {
+        this.addRibbonIcon('check-square', '任务看板', () => {
             this.activateView();
         });
 
         // 添加命令
         this.addCommand({
-            id: 'open-task-board',
-            name: '打开任务积分板',
+            id: 'open-task-kanban',
+            name: '打开任务看板',
             callback: () => {
                 this.activateView();
             }
@@ -45,9 +45,12 @@ export default class TaskBoardPlugin extends Plugin {
         }
 
         // 否则创建新视图
-        await this.app.workspace.getRightLeaf(false).setViewState({
-            type: VIEW_TYPE_TASK_BOARD,
-            active: true,
-        });
+        const leaf = this.app.workspace.getRightLeaf(false);
+        if (leaf) {
+            await leaf.setViewState({
+                type: VIEW_TYPE_TASK_BOARD,
+                active: true,
+            });
+        }
     }
 }

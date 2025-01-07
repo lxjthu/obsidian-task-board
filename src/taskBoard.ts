@@ -1,7 +1,7 @@
 import moment from 'moment';
 import { ItemView, WorkspaceLeaf, App, Modal, Setting, Notice, TFile } from 'obsidian';
 
-export const VIEW_TYPE_TASK_BOARD = 'task-points-board-view';
+export const VIEW_TYPE_TASK_BOARD = 'task-kanban-view';
 
 // 将接口移到类的外部
 interface Task {
@@ -40,8 +40,9 @@ interface TaskCompletion {
 
 // 创建反思对话框
 class ReflectionModal extends Modal {
-    reflection: string = ''; // 初始化反思内容
-    onSubmit: (reflection: string) => void;
+    private textArea: HTMLTextAreaElement;
+    private reflection: string = '';
+    private onSubmit: (reflection: string) => void;
 
     constructor(app: App, onSubmit: (reflection: string) => void) {
         super(app);
@@ -54,17 +55,17 @@ class ReflectionModal extends Modal {
         
         contentEl.createEl("h2", { text: "完成心得" });
 
-        // 创建文本区域并添加输入事件
-        const textArea = contentEl.createEl("textarea", {
+        // 创建并保存文本区域引用
+        this.textArea = contentEl.createEl("textarea", {
             attr: { 
                 rows: "6",
                 style: "width: 100%; margin-bottom: 1em;"
             }
         });
         
-        // 添加输入事件监听
-        textArea.addEventListener('input', (e) => {
-            this.reflection = (e.target as HTMLTextAreaElement).value;
+        // 直接监听 input 事件
+        this.textArea.addEventListener('input', () => {
+            this.reflection = this.textArea.value;
         });
 
         const buttonDiv = contentEl.createEl("div", {
@@ -85,6 +86,9 @@ class ReflectionModal extends Modal {
                 new Notice('请输入完成心得');
             }
         });
+
+        // 聚焦到文本区域
+        this.textArea.focus();
     }
 
     onClose() {
@@ -93,8 +97,11 @@ class ReflectionModal extends Modal {
     }
 }
 
+type ObsidianHTMLElement = HTMLElement;
+
 export class TaskBoardView extends ItemView {
-    contentEl: HTMLElement;
+    contentEl: ObsidianHTMLElement;
+    containerEl: ObsidianHTMLElement;
     private data: TaskBoardData;
     private completions: TaskCompletion[] = [];
 
@@ -115,7 +122,7 @@ export class TaskBoardView extends ItemView {
     }
 
     getDisplayText() {
-        return '任务积分板';
+        return '任务看板';
     }
 
     async onOpen() {
@@ -126,7 +133,7 @@ export class TaskBoardView extends ItemView {
         this.completions = this.data.completions || [];
 
         // 创建界面
-        this.contentEl = this.containerEl.children[1] as HTMLElement;
+        this.contentEl = this.containerEl.children[1] as ObsidianHTMLElement;
         this.contentEl.empty();
         this.contentEl.addClass('task-board-container');
 
@@ -147,7 +154,7 @@ export class TaskBoardView extends ItemView {
 
     private createHeader() {
         const header = this.contentEl.createEl('div', { cls: 'task-board-header' });
-        header.createEl('h2', { text: '任务积分板' });
+        header.createEl('h2', { text: '任务看板' });
     }
 
     private createUserSection() {
@@ -167,7 +174,7 @@ export class TaskBoardView extends ItemView {
         this.renderTasks(taskList);
     }
 
-    private renderTasks(container: HTMLElement) {
+    private renderTasks(container: ObsidianHTMLElement) {
         container.empty();
         
         this.data.tasks.forEach(task => {
@@ -175,8 +182,19 @@ export class TaskBoardView extends ItemView {
                 cls: `task-item ${task.isUrgent ? 'urgent' : ''} ${task.isImportant ? 'important' : ''}`
             });
             
-            // 添加标签显示
-            const tagsContainer = taskEl.createEl('div', { cls: 'task-tags' });
+            // 复选框
+            const checkbox = taskEl.createEl('input', { 
+                type: 'checkbox',
+                cls: 'task-checkbox'
+            });
+            checkbox.checked = task.completed;
+            checkbox.addEventListener('change', () => this.toggleTask(task.id));
+            
+            // 任务信息容器
+            const infoContainer = taskEl.createEl('div', { cls: 'task-info' });
+            
+            // 标签容器
+            const tagsContainer = infoContainer.createEl('div', { cls: 'task-tags' });
             if (task.isUrgent) {
                 tagsContainer.createEl('span', { 
                     text: '紧急',
@@ -189,19 +207,11 @@ export class TaskBoardView extends ItemView {
                     cls: 'task-tag important'
                 });
             }
-
-            // 任务完成状态
-            const checkbox = taskEl.createEl('input', { type: 'checkbox' });
-            checkbox.checked = task.completed;
-            checkbox.addEventListener('change', () => this.toggleTask(task.id));
-            
-            // 任务信息容器
-            const infoContainer = taskEl.createEl('div', { cls: 'task-info' });
             
             // 任务标题
             infoContainer.createEl('span', { 
                 text: task.title,
-                cls: task.completed ? 'completed' : ''
+                cls: `task-title ${task.completed ? 'completed' : ''}`
             });
             
             // 计时信息
@@ -216,7 +226,7 @@ export class TaskBoardView extends ItemView {
             
             // 开始/暂停按钮
             const timerBtn = btnContainer.createEl('button', {
-                text: task.isTimerRunning ? '暂停' : '开始',
+                text: task.isTimerRunning ? '暂停' : (task.timeSpent > 0 ? '继续' : '开始'),
                 cls: `timer-btn ${task.isTimerRunning ? 'running' : ''}`
             });
             timerBtn.addEventListener('click', () => this.toggleTimer(task.id, timeDisplay));
@@ -248,7 +258,7 @@ export class TaskBoardView extends ItemView {
         return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }
 
-    private updateTimeDisplay(task: Task, displayEl: HTMLElement) {
+    private updateTimeDisplay(task: Task, displayEl: ObsidianHTMLElement) {
         if (!task.isTimerRunning) return;
         
         const now = Date.now();
@@ -256,7 +266,7 @@ export class TaskBoardView extends ItemView {
         displayEl.textContent = this.formatTime(totalSeconds);
     }
 
-    private async toggleTimer(taskId: string, displayEl: HTMLElement) {
+    private async toggleTimer(taskId: string, displayEl: ObsidianHTMLElement) {
         const task = this.data.tasks.find(t => t.id === taskId);
         if (!task) return;
 
@@ -279,7 +289,7 @@ export class TaskBoardView extends ItemView {
             }, 1000);
             
             // 更新按钮状态
-            const button = displayEl.parentElement?.querySelector('.timer-btn') as HTMLElement;
+            const button = displayEl.parentElement?.querySelector('.timer-btn') as ObsidianHTMLElement;
             if (button) {
                 button.textContent = '暂停';
                 button.classList.add('running');
@@ -299,9 +309,9 @@ export class TaskBoardView extends ItemView {
             }
             
             // 更新按钮状态
-            const button = displayEl.parentElement?.querySelector('.timer-btn') as HTMLElement;
+            const button = displayEl.parentElement?.querySelector('.timer-btn') as ObsidianHTMLElement;
             if (button) {
-                button.textContent = '开始';
+                button.textContent = task.timeSpent > 0 ? '继续' : '开始';
                 button.classList.remove('running');
             }
         }
@@ -392,10 +402,15 @@ export class TaskBoardView extends ItemView {
     }
 
     private async deleteCompletion(completion: TaskCompletion) {
+        // 同时从两个地方删除记录
         this.completions = this.completions.filter(c => 
             c.taskName !== completion.taskName || 
             c.timestamp !== completion.timestamp
         );
+        
+        // 同步到 data.completions
+        this.data.completions = this.completions;
+        
         await this.saveData();
         this.createStatsSection();
         new Notice('已删除完成记录');
@@ -460,6 +475,8 @@ export class TaskBoardView extends ItemView {
         const savedData = await this.loadLocalData();
         if (savedData) {
             this.data = { ...this.data, ...savedData };
+            // 从保存的数据中恢复 completions
+            this.completions = this.data.completions || [];
         }
     }
 
@@ -468,13 +485,13 @@ export class TaskBoardView extends ItemView {
     }
 
     private async loadLocalData(): Promise<TaskBoardData | null> {
-        const data = await this.app.vault.adapter.read(`${this.app.vault.configDir}/task-board.json`);
+        const data = await this.app.vault.adapter.read(`${this.app.vault.configDir}/task-kanban.json`);
         return data ? JSON.parse(data) : null;
     }
 
     private async saveLocalData(data: TaskBoardData) {
         await this.app.vault.adapter.write(
-            `${this.app.vault.configDir}/task-board.json`,
+            `${this.app.vault.configDir}/task-kanban.json`,
             JSON.stringify(data)
         );
     }
@@ -485,12 +502,12 @@ export class TaskBoardView extends ItemView {
                 this.data.tasks.push({
                     id: Date.now().toString(),
                     title: result.title,
-                    isUrgent: false,
-                    isImportant: false,
+                    isUrgent: result.isUrgent,
+                    isImportant: result.isImportant,
                     completed: false,
                     timeSpent: 0,
                     isTimerRunning: false,
-                    startedAt: undefined  // 初始化为 undefined
+                    startedAt: undefined
                 });
                 await this.saveData();
                 const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
@@ -522,7 +539,7 @@ export class TaskBoardView extends ItemView {
                     });
 
                     await this.saveData();
-                    this.renderTasks(this.contentEl.querySelector('.task-list') as HTMLElement);
+                    this.renderTasks(this.contentEl.querySelector('.task-list') as ObsidianHTMLElement);
                     this.createStatsSection();
                     
                     new Notice("任务完成！");
@@ -537,7 +554,7 @@ export class TaskBoardView extends ItemView {
                 // this.completions = this.completions.filter(c => c.taskName !== task.title);
                 
                 await this.saveData();
-                this.renderTasks(this.contentEl.querySelector('.task-list') as HTMLElement);
+                this.renderTasks(this.contentEl.querySelector('.task-list') as ObsidianHTMLElement);
                 this.createStatsSection();
             }
         }
@@ -550,7 +567,7 @@ export class TaskBoardView extends ItemView {
             task.isTimerRunning = false;
             delete task.timerStartTime;
             await this.saveData();
-            this.renderTasks(this.contentEl.querySelector('.task-list') as HTMLElement);
+            this.renderTasks(this.contentEl.querySelector('.task-list') as ObsidianHTMLElement);
         }
     }
 
@@ -560,7 +577,7 @@ export class TaskBoardView extends ItemView {
             this.data.tasks.splice(taskIndex, 1);
             await this.saveData();
             // 更新任务列表和完成记录
-            this.renderTasks(this.contentEl.querySelector('.task-list') as HTMLElement);
+            this.renderTasks(this.contentEl.querySelector('.task-list') as ObsidianHTMLElement);
             this.createStatsSection();
         }
     }
@@ -643,11 +660,12 @@ export class TaskBoardView extends ItemView {
 
     // 添加清空所有完成记录的方法
     private async clearAllCompletions() {
-        // 添加确认对话框
         if (this.completions.length > 0) {
             const confirmed = confirm('确定要清空所有完成记录吗？此操作不可撤销。');
             if (confirmed) {
                 this.completions = [];
+                // 更新 TaskBoardData 中的 completions
+                this.data.completions = [];
                 await this.saveData();
                 this.createStatsSection();
                 new Notice('已清空所有完成记录');
@@ -659,7 +677,7 @@ export class TaskBoardView extends ItemView {
 }
 
 class TaskModal extends Modal {
-    private title: string = '';
+    private titleInput: HTMLInputElement;
     private isUrgent: boolean = false;
     private isImportant: boolean = false;
     private onSubmit: (result: { 
@@ -682,42 +700,60 @@ class TaskModal extends Modal {
         contentEl.empty();
         contentEl.createEl('h2', { text: '添加新任务' });
 
-        new Setting(contentEl)
-            .setName('任务名称')
-            .addText(text => text
-                .setValue(this.title)
-                .onChange(value => this.title = value));
+        // 直接创建输入框
+        const inputContainer = contentEl.createDiv('task-input-container');
+        inputContainer.createEl('label', { text: '任务名称' });
+        this.titleInput = inputContainer.createEl('input', {
+            type: 'text',
+            attr: {
+                style: 'width: 100%; margin-top: 8px; padding: 4px;'
+            }
+        });
 
-        new Setting(contentEl)
-            .setName('紧急')
-            .addToggle(toggle => toggle
-                .setValue(this.isUrgent)
-                .onChange(value => this.isUrgent = value));
+        // 紧急标签切换
+        const urgentContainer = contentEl.createDiv('task-toggle-container');
+        urgentContainer.createEl('label', { text: '紧急' });
+        const urgentToggle = urgentContainer.createEl('input', { type: 'checkbox' });
+        urgentToggle.addEventListener('change', (e) => {
+            this.isUrgent = (e.target as HTMLInputElement).checked;
+        });
 
-        new Setting(contentEl)
-            .setName('重要')
-            .addToggle(toggle => toggle
-                .setValue(this.isImportant)
-                .onChange(value => this.isImportant = value));
+        // 重要标签切换
+        const importantContainer = contentEl.createDiv('task-toggle-container');
+        importantContainer.createEl('label', { text: '重要' });
+        const importantToggle = importantContainer.createEl('input', { type: 'checkbox' });
+        importantToggle.addEventListener('change', (e) => {
+            this.isImportant = (e.target as HTMLInputElement).checked;
+        });
 
-        new Setting(contentEl)
-            .addButton(btn => btn
-                .setButtonText('保存')
-                .setCta()
-                .onClick(() => {
-                    this.onSubmit({
-                        title: this.title,
-                        isUrgent: this.isUrgent,
-                        isImportant: this.isImportant
-                    });
-                    this.close();
-                }))
-            .addButton(btn => btn
-                .setButtonText('取消')
-                .onClick(() => {
-                    this.onSubmit(null);
-                    this.close();
-                }));
+        // 按钮容器
+        const buttonContainer = contentEl.createDiv('task-button-container');
+        
+        // 保存按钮
+        const saveButton = buttonContainer.createEl('button', { text: '保存' });
+        saveButton.addEventListener('click', () => {
+            const title = this.titleInput.value.trim();
+            if (title) {
+                this.onSubmit({
+                    title: title,
+                    isUrgent: this.isUrgent,
+                    isImportant: this.isImportant
+                });
+                this.close();
+            } else {
+                new Notice('请输入任务名称');
+            }
+        });
+
+        // 取消按钮
+        const cancelButton = buttonContainer.createEl('button', { text: '取消' });
+        cancelButton.addEventListener('click', () => {
+            this.onSubmit(null);
+            this.close();
+        });
+
+        // 聚焦到输入框
+        this.titleInput.focus();
     }
 
     onClose() {

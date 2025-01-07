@@ -78,7 +78,9 @@
     display: flex;
     align-items: center;
     padding: 8px;
-    border-bottom: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    margin-bottom: 4px;
+    background-color: var(--background-primary);
 }
 
 .task-item input[type="checkbox"] {
@@ -91,11 +93,15 @@
 }
 
 .task-info {
-    flex: 1;
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    flex: 1;
     margin-left: 8px;
+}
+
+.task-title {
+    flex: 1;
+    margin-right: 8px;
 }
 
 .timer-container {
@@ -309,4 +315,85 @@
 
 .summary-btn:hover {
     opacity: 0.85;
+}
+
+.task-input-container,
+.task-toggle-container,
+.task-button-container {
+    margin: 1em 0;
+}
+
+.task-toggle-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.task-button-container {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.task-button-container button {
+    padding: 6px 12px;
+    border-radius: 4px;
+}
+
+/* 任务标签样式 */
+.task-tags {
+    display: flex;
+    gap: 4px;
+    margin-right: 8px;
+}
+
+.task-tag {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: white;
+}
+
+.task-tag.urgent {
+    background-color: #ff4d4f;
+}
+
+.task-tag.important {
+    background-color: #1890ff;
+}
+
+/* 任务项样式更新 */
+.task-item {
+    display: flex;
+    align-items: center;
+    padding: 8px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    background-color: var(--background-primary);
+}
+
+.task-item.urgent {
+    border-left: 3px solid #ff4d4f;
+}
+
+.task-item.important {
+    border-left: 3px solid #1890ff;
+}
+
+.task-item.urgent.important {
+    border-left: 3px solid #722ed1;
+}
+
+/* 任务信息布局调整 */
+.task-info {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    margin-left: 8px;
+}
+
+.task-title {
+    flex: 1;
+    margin-right: 8px;
 }

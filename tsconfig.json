@@ -11,13 +11,12 @@
     "moduleResolution": "node",
     "importHelpers": true,
     "isolatedModules": true,
-    "strictNullChecks": false,
+    "strictNullChecks": true,
     "lib": [
       "DOM",
       "ES5",
       "ES6",
-      "ES7",
-      "ES2017"
+      "ES7"
     ]
   },
   "include": [

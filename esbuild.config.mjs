@@ -11,7 +11,7 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = process.argv[2] === "production";
 
-esbuild.build({
+const build = await esbuild.build({
     banner: {
         js: banner,
     },
@@ -31,11 +31,12 @@ esbuild.build({
         "@lezer/common",
         "@lezer/highlight",
         "@lezer/lr",
-        ...builtins],
+        ...builtins
+    ],
     format: "cjs",
     target: "es2018",
     logLevel: "info",
     sourcemap: prod ? false : "inline",
     treeShaking: true,
     outfile: "main.js",
-}).catch(() => process.exit(1));
+});

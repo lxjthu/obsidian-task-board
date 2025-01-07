@@ -1,9 +1,9 @@
 {
-  "id": "task-points-board",
-  "name": "Task Points Board",
+  "id": "task-kanban",
+  "name": "任务看板",
   "version": "1.0.0",
   "minAppVersion": "0.15.0",
-  "description": "Task management and time tracking plugin with points system",
-  "author": "Your Name",
+  "description": "任务管理和时间追踪插件",
+  "author": "小狼早上好",
   "isDesktopOnly": false
 }
