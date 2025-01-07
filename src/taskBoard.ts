@@ -7,11 +7,12 @@ export const VIEW_TYPE_TASK_BOARD = 'task-points-board-view';
 interface Task {
     id: string;
     title: string;
-    points: number;
+    isUrgent: boolean;    // 新增：紧急标签
+    isImportant: boolean; // 新增：重要标签
     completed: boolean;
     completedBy?: string;
     completedAt?: number;
-    startedAt?: number;    // 添加开始时间
+    startedAt?: number;
     description?: string;
     timeSpent: number;
     isTimerRunning: boolean;
@@ -170,8 +171,25 @@ export class TaskBoardView extends ItemView {
         container.empty();
         
         this.data.tasks.forEach(task => {
-            const taskEl = container.createEl('div', { cls: 'task-item' });
+            const taskEl = container.createEl('div', { 
+                cls: `task-item ${task.isUrgent ? 'urgent' : ''} ${task.isImportant ? 'important' : ''}`
+            });
             
+            // 添加标签显示
+            const tagsContainer = taskEl.createEl('div', { cls: 'task-tags' });
+            if (task.isUrgent) {
+                tagsContainer.createEl('span', { 
+                    text: '紧急',
+                    cls: 'task-tag urgent'
+                });
+            }
+            if (task.isImportant) {
+                tagsContainer.createEl('span', { 
+                    text: '重要',
+                    cls: 'task-tag important'
+                });
+            }
+
             // 任务完成状态
             const checkbox = taskEl.createEl('input', { type: 'checkbox' });
             checkbox.checked = task.completed;
@@ -180,9 +198,9 @@ export class TaskBoardView extends ItemView {
             // 任务信息容器
             const infoContainer = taskEl.createEl('div', { cls: 'task-info' });
             
-            // 任务标题和积分
+            // 任务标题
             infoContainer.createEl('span', { 
-                text: `${task.title} (${task.points}分)`,
+                text: task.title,
                 cls: task.completed ? 'completed' : ''
             });
             
@@ -344,7 +362,7 @@ export class TaskBoardView extends ItemView {
             const task = this.data.tasks.find(t => t.title === completion.taskName);
             
             contentContainer.createEl('div', { 
-                text: `📝 ${completion.taskName} (${task?.points || 0}分)`,
+                text: `📝 ${completion.taskName} ${task?.isUrgent ? '[紧急]' : ''} ${task?.isImportant ? '[重要]' : ''}`,
                 cls: 'task-record-title'
             });
             contentContainer.createEl('div', { 
@@ -467,7 +485,8 @@ export class TaskBoardView extends ItemView {
                 this.data.tasks.push({
                     id: Date.now().toString(),
                     title: result.title,
-                    points: result.points,
+                    isUrgent: false,
+                    isImportant: false,
                     completed: false,
                     timeSpent: 0,
                     isTimerRunning: false,
@@ -607,11 +626,12 @@ export class TaskBoardView extends ItemView {
         let content = `## 今日任务总结 (${now.toLocaleTimeString()})\n\n`;
 
         this.completions.forEach(({ taskName, reflection, timestamp }) => {
-            // 找到对应的任务以获取详细信息
             const task = this.data.tasks.find(t => t.title === taskName);
-            const time = new Date(timestamp).toLocaleTimeString();
+            const tags = [];
+            if (task?.isUrgent) tags.push('紧急');
+            if (task?.isImportant) tags.push('重要');
             
-            content += `### ${taskName} (${task?.points || 0}分)\n`;
+            content += `### ${taskName} ${tags.length ? `[${tags.join('/')}]` : ''}\n`;
             content += `- 开始时间：${this.formatDate(task?.startedAt)}\n`;
             content += `- 完成时间：${this.formatDate(task?.completedAt)}\n`;
             content += `- 总用时：${this.formatTime(task?.timeSpent || 0)}\n`;
@@ -640,10 +660,19 @@ export class TaskBoardView extends ItemView {
 
 class TaskModal extends Modal {
     private title: string = '';
-    private points: number = 0;
-    private onSubmit: (result: { title: string, points: number } | null) => void;
+    private isUrgent: boolean = false;
+    private isImportant: boolean = false;
+    private onSubmit: (result: { 
+        title: string, 
+        isUrgent: boolean, 
+        isImportant: boolean 
+    } | null) => void;
 
-    constructor(app: App, onSubmit: (result: { title: string, points: number } | null) => void) {
+    constructor(app: App, onSubmit: (result: { 
+        title: string, 
+        isUrgent: boolean, 
+        isImportant: boolean 
+    } | null) => void) {
         super(app);
         this.onSubmit = onSubmit;
     }
@@ -660,10 +689,16 @@ class TaskModal extends Modal {
                 .onChange(value => this.title = value));
 
         new Setting(contentEl)
-            .setName('积分')
-            .addText(text => text
-                .setValue(this.points.toString())
-                .onChange(value => this.points = Number(value)));
+            .setName('紧急')
+            .addToggle(toggle => toggle
+                .setValue(this.isUrgent)
+                .onChange(value => this.isUrgent = value));
+
+        new Setting(contentEl)
+            .setName('重要')
+            .addToggle(toggle => toggle
+                .setValue(this.isImportant)
+                .onChange(value => this.isImportant = value));
 
         new Setting(contentEl)
             .addButton(btn => btn
@@ -672,7 +707,8 @@ class TaskModal extends Modal {
                 .onClick(() => {
                     this.onSubmit({
                         title: this.title,
-                        points: this.points
+                        isUrgent: this.isUrgent,
+                        isImportant: this.isImportant
                     });
                     this.close();
                 }))
