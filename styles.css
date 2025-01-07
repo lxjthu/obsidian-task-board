@@ -1,0 +1,254 @@
+/* 主容器样式 */
+.task-board-container {
+    padding: 20px;
+}
+
+/* 头部样式 */
+.task-board-header {
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+/* 用户区域样式 */
+.task-board-user-section {
+    margin-bottom: 20px;
+    padding: 10px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 5px;
+}
+
+/* 任务区域样式 */
+.task-board-task-section {
+    margin: 20px 0;
+}
+
+/* 统计区域样式 */
+.task-board-stats-section {
+    background: var(--background-secondary);
+    padding: 15px;
+    border-radius: 5px;
+    margin: 20px 0;
+}
+
+.task-board-stats-section > div {
+    margin: 5px 0;
+}
+
+/* 奖励区域样式 */
+.task-board-reward-section {
+    padding: 10px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 5px;
+}
+
+/* 按钮样式 */
+.task-board-button {
+    background-color: var(--interactive-accent);
+    color: var(--text-on-accent);
+    padding: 5px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    margin: 5px;
+}
+
+/* 输入框样式 */
+.task-board-input {
+    width: 100%;
+    padding: 5px;
+    margin-bottom: 10px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 3px;
+}
+
+/* 列表项样式 */
+.task-board-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px;
+    margin-bottom: 5px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.task-list {
+    margin-top: 10px;
+}
+
+.task-item {
+    display: flex;
+    align-items: center;
+    padding: 8px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.task-item input[type="checkbox"] {
+    margin-right: 8px;
+}
+
+.task-item .completed {
+    text-decoration: line-through;
+    color: var(--text-muted);
+}
+
+.task-info {
+    flex: 1;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-left: 8px;
+}
+
+.timer-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.time-display {
+    font-family: monospace;
+    min-width: 80px;
+    color: var(--text-muted);
+}
+
+.timer-btn {
+    font-size: 12px;
+    padding: 2px 6px;
+    border: none;
+    border-radius: 3px;
+    color: var(--text-on-accent);
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+/* 开始按钮 - 使用柔和的绿色 */
+.timer-btn:not(.running):not(.reset):not(.delete) {
+    background-color: var(--interactive-success);
+}
+
+/* 运行中按钮 - 使用柔和的黄色 */
+.timer-btn.running {
+    background-color: #e6b800;
+}
+
+/* 清零按钮 - 使用柔和的蓝色 */
+.timer-btn.reset {
+    background-color: var(--interactive-accent);
+}
+
+/* 删除按钮 - 使用柔和的红色 */
+.timer-btn.delete {
+    background-color: #e57373;
+}
+
+/* 悬停效果 */
+.timer-btn:hover {
+    opacity: 0.85;
+}
+
+/* 按钮组样式 */
+.timer-btn-group {
+    display: flex;
+    gap: 4px;
+}
+
+.task-record-list {
+    margin-top: 10px;
+}
+
+.task-record-item {
+    padding: 10px;
+    margin-bottom: 10px;
+    background: var(--background-primary);
+    border-radius: 5px;
+    border-left: 4px solid var(--interactive-accent);
+}
+
+.task-record-title {
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+
+.task-record-time {
+    color: var(--text-muted);
+    font-size: 0.9em;
+    margin-left: 20px;
+}
+
+.no-tasks {
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 10px;
+    text-align: center;
+}
+
+.stats-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.clear-records-btn {
+    font-size: 12px;
+    padding: 4px 8px;
+    background-color: var(--text-muted);
+    color: var(--text-on-accent);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.clear-records-btn:hover {
+    opacity: 0.85;
+}
+
+.task-record-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 10px;
+    margin-bottom: 10px;
+    background: var(--background-primary);
+    border-radius: 5px;
+    border-left: 4px solid var(--interactive-accent);
+}
+
+.record-content {
+    flex: 1;
+}
+
+.record-delete-btn {
+    font-size: 12px;
+    padding: 2px 6px;
+    background-color: #e57373;
+    color: var(--text-on-accent);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.record-delete-btn:hover {
+    opacity: 0.85;
+}
+
+.stats-header-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.summary-btn {
+    font-size: 12px;
+    padding: 4px 8px;
+    background-color: var(--interactive-success);
+    color: var(--text-on-accent);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.summary-btn:hover {
+    opacity: 0.85;
+}

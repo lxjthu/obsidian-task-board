@@ -1,0 +1,9 @@
+{
+  "id": "task-points-board",
+  "name": "Task Points Board",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Task management and time tracking plugin with points system",
+  "author": "Your Name",
+  "isDesktopOnly": false
+}
