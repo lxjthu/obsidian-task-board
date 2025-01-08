@@ -529,6 +529,12 @@ export class TaskBoardView extends ItemView {
                     task.completed = true;
                     task.completedBy = this.data.currentUserId;
                     task.completedAt = Date.now();
+
+                    // 更新对应笔记的 frontmatter
+                    await this.updateNoteFrontmatter(task);
+                    
+                    // 添加完成记录到笔记中
+                    await this.addCompletionToNote(task, reflection);
                     
                     this.completions.push({
                         taskName: task.title,
@@ -546,13 +552,12 @@ export class TaskBoardView extends ItemView {
                     new Notice("任务完成！");
                 }).open();
             } else {
-                // 取消完成时的处理
                 task.completed = false;
                 delete task.completedBy;
                 delete task.completedAt;
                 
-                // 不再从完成记录中移除
-                // this.completions = this.completions.filter(c => c.taskName !== task.title);
+                // 更新对应笔记的 frontmatter
+                await this.updateNoteFrontmatter(task);
                 
                 await this.saveData();
                 this.renderTasks(this.contentEl.querySelector('.task-list') as ObsidianHTMLElement);
@@ -677,25 +682,52 @@ export class TaskBoardView extends ItemView {
     }
 
     private async openOrCreateNote(taskTitle: string) {
-        // 规范化文件名(移除不允许的字符)
         const fileName = taskTitle.replace(/[\\/:*?"<>|]/g, '');
         const filePath = `tasks/${fileName}.md`;
+        
+        // 获取当前任务对象
+        const task = this.data.tasks.find(t => t.title === taskTitle);
+        if (!task) return;
+
+        // 生成 frontmatter 和笔记内容
+        const noteContent = [
+            '---',
+            `alias: ${taskTitle}`,
+            `status: ${task.completed ? '已完成' : '进行中'}`,
+            `created: ${moment().format('YYYY-MM-DD')}`,
+            'due: ',  // 留空
+            `progress: ${task.timeSpent > 0 ? Math.floor((task.timeSpent / 3600) * 100) : ''}`,
+            `done: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+            'tags:',
+            '  - 任务',
+            ...(task.isUrgent ? ['  - 紧急'] : []),
+            ...(task.isImportant ? ['  - 重要'] : []),
+            '---',
+            '',
+            `# ${taskTitle}`,
+            '',
+            '## 任务详情',
+            '',
+            '## 进展记录',
+            '',
+            '## 完成情况记录',
+            '',
+            '## 相关链接',
+            ''
+        ].join('\n');
 
         try {
+            // 确保 tasks 文件夹存在
+            if (!(await this.app.vault.adapter.exists('tasks'))) {
+                await this.app.vault.createFolder('tasks');
+            }
+
             // 检查笔记是否存在
             const exists = await this.app.vault.adapter.exists(filePath);
             
             if (!exists) {
-                // 确保 tasks 文件夹存在
-                if (!(await this.app.vault.adapter.exists('tasks'))) {
-                    await this.app.vault.createFolder('tasks');
-                }
-
                 // 创建新笔记
-                await this.app.vault.create(
-                    filePath,
-                    `# ${taskTitle}\n\n## 任务详情\n\n## 进展记录\n\n## 相关链接\n`
-                );
+                await this.app.vault.create(filePath, noteContent);
             }
 
             // 打开笔记
@@ -706,6 +738,86 @@ export class TaskBoardView extends ItemView {
         } catch (error) {
             new Notice('打开或创建笔记时出错');
             console.error(error);
+        }
+    }
+
+    // 添加更新笔记 frontmatter 的方法
+    private async updateNoteFrontmatter(task: Task) {
+        const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        const filePath = `tasks/${fileName}.md`;
+
+        try {
+            if (await this.app.vault.adapter.exists(filePath)) {
+                const file = this.app.vault.getAbstractFileByPath(filePath);
+                if (file instanceof TFile) {
+                    const content = await this.app.vault.read(file);
+                    
+                    // 更新 frontmatter
+                    const newFrontmatter = [
+                        '---',
+                        `alias: ${task.title}`,
+                        `status: ${task.completed ? '已完成' : '进行中'}`,
+                        `created: ${moment(file.stat.ctime).format('YYYY-MM-DD')}`,
+                        'due: ',
+                        `progress: ${task.timeSpent > 0 ? Math.floor((task.timeSpent / 3600) * 100) : ''}`,
+                        `done: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        'tags:',
+                        '  - 任务',
+                        ...(task.isUrgent ? ['  - 紧急'] : []),
+                        ...(task.isImportant ? ['  - 重要'] : []),
+                        '---'
+                    ].join('\n');
+
+                    // 替换原有的 frontmatter
+                    const newContent = content.replace(/---[\s\S]*?---/, newFrontmatter);
+                    await this.app.vault.modify(file, newContent);
+                }
+            }
+        } catch (error) {
+            console.error('更新笔记 frontmatter 失败:', error);
+        }
+    }
+
+    // 添加新方法：将完成记录添加到笔记中
+    private async addCompletionToNote(task: Task, reflection: string) {
+        const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        const filePath = `tasks/${fileName}.md`;
+
+        try {
+            if (await this.app.vault.adapter.exists(filePath)) {
+                const file = this.app.vault.getAbstractFileByPath(filePath);
+                if (file instanceof TFile) {
+                    let content = await this.app.vault.read(file);
+                    
+                    // 格式化完成记录
+                    const completionRecord = [
+                        '',
+                        `### ${moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss')} 完成记录`,
+                        `- 开始时间：${task.startedAt ? moment(task.startedAt).format('YYYY-MM-DD HH:mm:ss') : '未记录'}`,
+                        `- 完成时间：${moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss')}`,
+                        `- 总用时：${this.formatTime(task.timeSpent)}`,
+                        `- 完成心得：${reflection}`,
+                        ''
+                    ].join('\n');
+
+                    // 查找完成情况记录部分并添加新记录
+                    const completionSectionRegex = /## 完成情况记录\n/;
+                    if (completionSectionRegex.test(content)) {
+                        content = content.replace(
+                            completionSectionRegex,
+                            `## 完成情况记录\n${completionRecord}`
+                        );
+                    } else {
+                        // 如果没有找到完成情况记录部分，添加到文件末尾
+                        content += '\n## 完成情况记录\n' + completionRecord;
+                    }
+
+                    await this.app.vault.modify(file, content);
+                }
+            }
+        } catch (error) {
+            console.error('添加完成记录到笔记失败:', error);
+            new Notice('添加完成记录到笔记失败');
         }
     }
 }
