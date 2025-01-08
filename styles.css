@@ -397,3 +397,14 @@
     flex: 1;
     margin-right: 8px;
 }
+
+/* 可点击的任务标题样式 */
+.task-title.clickable {
+    cursor: pointer;
+    color: var(--text-accent);
+    text-decoration: underline;
+}
+
+.task-title.clickable:hover {
+    color: var(--text-accent-hover);
+}

@@ -209,10 +209,11 @@ export class TaskBoardView extends ItemView {
             }
             
             // 任务标题
-            infoContainer.createEl('span', { 
+            const titleEl = infoContainer.createEl('span', { 
                 text: task.title,
-                cls: `task-title ${task.completed ? 'completed' : ''}`
+                cls: `task-title ${task.completed ? 'completed' : ''} clickable`
             });
+            titleEl.addEventListener('click', () => this.openOrCreateNote(task.title));
             
             // 计时信息
             const timerContainer = infoContainer.createEl('div', { cls: 'timer-container' });
@@ -672,6 +673,39 @@ export class TaskBoardView extends ItemView {
             }
         } else {
             new Notice('没有可清空的记录');
+        }
+    }
+
+    private async openOrCreateNote(taskTitle: string) {
+        // 规范化文件名(移除不允许的字符)
+        const fileName = taskTitle.replace(/[\\/:*?"<>|]/g, '');
+        const filePath = `tasks/${fileName}.md`;
+
+        try {
+            // 检查笔记是否存在
+            const exists = await this.app.vault.adapter.exists(filePath);
+            
+            if (!exists) {
+                // 确保 tasks 文件夹存在
+                if (!(await this.app.vault.adapter.exists('tasks'))) {
+                    await this.app.vault.createFolder('tasks');
+                }
+
+                // 创建新笔记
+                await this.app.vault.create(
+                    filePath,
+                    `# ${taskTitle}\n\n## 任务详情\n\n## 进展记录\n\n## 相关链接\n`
+                );
+            }
+
+            // 打开笔记
+            const file = this.app.vault.getAbstractFileByPath(filePath);
+            if (file instanceof TFile) {
+                await this.app.workspace.getLeaf(false).openFile(file);
+            }
+        } catch (error) {
+            new Notice('打开或创建笔记时出错');
+            console.error(error);
         }
     }
 }
