@@ -408,3 +408,59 @@
 .task-title.clickable:hover {
     color: var(--text-accent-hover);
 }
+
+.category-container {
+    background: var(--background-secondary);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+.category-title {
+    color: var(--text-accent);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--text-accent);
+}
+
+.drag-over {
+    background: var(--background-modifier-hover);
+}
+
+/* 分类标签样式 */
+.task-category-tag {
+    background: var(--text-accent);
+    color: var(--text-on-accent);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    margin-right: 8px;
+}
+
+.task-time-info {
+    font-size: 0.8em;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.task-date {
+    margin-right: 12px;
+}
+
+.due-date {
+    color: var(--text-error);
+}
+
+.task-reminder-icon {
+    color: var(--text-accent);
+}
+
+.task-hide-container {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+}
+
+.task-hide-container input[type="checkbox"] {
+    margin-left: 8px;
+}

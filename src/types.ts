@@ -13,6 +13,11 @@ export interface Task {
     category?: string;
     type?: 'normal' | 'checkin';
     checkinFolder?: string;
+    startDate?: string;
+    dueDate?: string;
+    reminder?: boolean;
+    reminderTime?: string;
+    hideBeforeStart?: boolean;
 } 
 
 enum TaskCategory {

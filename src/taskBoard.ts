@@ -91,6 +91,7 @@ export class TaskBoardView extends ItemView {
     containerEl: ObsidianHTMLElement;
     private data: TaskBoardData;
     private completions: TaskCompletion[] = [];
+    private reminderIntervalId: number;
 
     constructor(leaf: WorkspaceLeaf) {
         super(leaf);
@@ -137,6 +138,9 @@ export class TaskBoardView extends ItemView {
             attr: { style: "margin-top: 1em;" }
         });
         summaryButton.onclick = () => this.createDailySummary();
+
+        // 启动提醒检查
+        this.startReminderCheck();
     }
 
     private createHeader() {
@@ -162,9 +166,19 @@ export class TaskBoardView extends ItemView {
     }
 
     private renderTasks(container: ObsidianHTMLElement) {
+        // 过滤任务
+        const tasksToShow = this.data.tasks.filter(task => {
+            if (task.hideBeforeStart && task.startDate) {
+                const startDate = moment(task.startDate).startOf('day');
+                const today = moment().startOf('day');
+                return startDate.isSameOrBefore(today);
+            }
+            return true;
+        });
+
         container.empty();
         
-        this.data.tasks.forEach(task => {
+        tasksToShow.forEach(task => {
             const taskEl = container.createEl('div', { 
                 cls: `task-item ${task.isUrgent ? 'urgent' : ''} ${task.isImportant ? 'important' : ''}`
             });
@@ -201,6 +215,29 @@ export class TaskBoardView extends ItemView {
                 cls: `task-title ${task.completed ? 'completed' : ''} clickable`
             });
             titleEl.addEventListener('click', () => this.openOrCreateNote(task.title));
+            
+            // 在任务信息中添加时间显示
+            if (task.startDate || task.dueDate) {
+                const timeInfo = infoContainer.createEl('div', { cls: 'task-time-info' });
+                if (task.startDate) {
+                    timeInfo.createEl('span', { 
+                        text: `开始：${moment(task.startDate).format('MM-DD HH:mm')}`,
+                        cls: 'task-date start-date'
+                    });
+                }
+                if (task.dueDate) {
+                    timeInfo.createEl('span', { 
+                        text: `截止：${moment(task.dueDate).format('MM-DD HH:mm')}`,
+                        cls: 'task-date due-date'
+                    });
+                }
+                if (task.reminder) {
+                    timeInfo.createEl('span', { 
+                        text: '⏰',
+                        cls: 'task-reminder-icon'
+                    });
+                }
+            }
             
             // 计时信息
             const timerContainer = infoContainer.createEl('div', { cls: 'timer-container' });
@@ -492,7 +529,12 @@ export class TaskBoardView extends ItemView {
                     id: Date.now().toString(),
                     title: result.title,
                     category: result.category,
-                    type: result.type,  // 确保这里设置了 type
+                    type: result.type,
+                    startDate: result.startDate,
+                    dueDate: result.dueDate,
+                    reminder: result.reminder,
+                    reminderTime: result.reminderTime,
+                    hideBeforeStart: result.hideBeforeStart,
                     isUrgent: result.isUrgent,
                     isImportant: result.isImportant,
                     completed: false,
@@ -843,6 +885,7 @@ export class TaskBoardView extends ItemView {
             }
         } catch (error) {
             console.error('更新笔记 frontmatter 失败:', error);
+            new Notice('更新笔记 frontmatter 失败');
         }
     }
 
@@ -946,28 +989,89 @@ export class TaskBoardView extends ItemView {
             ''
         ].join('\n');
     }
+
+    private startReminderCheck() {
+        // 每分钟检查一次
+        this.reminderIntervalId = window.setInterval(() => {
+            this.checkReminders();
+        }, 60000);
+    }
+
+    private checkReminders() {
+        const now = moment();
+        this.data.tasks.forEach(task => {
+            if (task.reminder && task.reminderTime) {
+                const reminderTime = moment(task.reminderTime);
+                // 如果时间差在1分钟内
+                if (Math.abs(now.diff(reminderTime, 'minutes')) < 1) {
+                    // 触发提醒
+                    new Notice(`任务提醒：${task.title} 需要处理了！`, 10000);
+                    
+                    // 如果不是打卡任务，关闭提醒
+                    if (task.type !== 'checkin') {
+                        task.reminder = false;
+                        this.saveData();
+                    }
+                }
+            }
+
+            // 检查截止时间
+            if (task.dueDate && !task.completed) {
+                const dueTime = moment(task.dueDate);
+                const hoursLeft = dueTime.diff(now, 'hours');
+                
+                // 如果距离截止时间小于1小时
+                if (hoursLeft >= 0 && hoursLeft < 1) {
+                    new Notice(`任务警告：${task.title} 即将到期！`, 10000);
+                }
+            }
+        });
+    }
+
+    async onunload() {
+        // 清理提醒检查定时器
+        if (this.reminderIntervalId) {
+            clearInterval(this.reminderIntervalId);
+        }
+        // ... 现有代码 ...
+    }
 }
 
 class TaskModal extends Modal {
     private titleInput: HTMLInputElement;
     private categorySelect: HTMLSelectElement;
     private typeSelect: HTMLSelectElement;
+    private startDateInput: HTMLInputElement;
+    private dueDateInput: HTMLInputElement;
+    private reminderToggle: HTMLInputElement;
+    private reminderTimeInput: HTMLInputElement;
+    private hideBeforeStartToggle: HTMLInputElement;
     private isUrgent: boolean = false;
     private isImportant: boolean = false;
-    private onSubmit: (result: { 
-        title: string, 
-        category: string,
-        type: 'normal' | 'checkin',
-        isUrgent: boolean, 
-        isImportant: boolean 
+    private onSubmit: (result: {
+        title: string;
+        category: string;
+        type: 'normal' | 'checkin';
+        startDate?: string;
+        dueDate?: string;
+        reminder?: boolean;
+        reminderTime?: string;
+        hideBeforeStart?: boolean;
+        isUrgent: boolean;
+        isImportant: boolean;
     } | null) => void;
 
-    constructor(app: App, onSubmit: (result: { 
-        title: string, 
-        category: string,
-        type: 'normal' | 'checkin',
-        isUrgent: boolean, 
-        isImportant: boolean 
+    constructor(app: App, onSubmit: (result: {
+        title: string;
+        category: string;
+        type: 'normal' | 'checkin';
+        startDate?: string;
+        dueDate?: string;
+        reminder?: boolean;
+        reminderTime?: string;
+        hideBeforeStart?: boolean;
+        isUrgent: boolean;
+        isImportant: boolean;
     } | null) => void) {
         super(app);
         this.onSubmit = onSubmit;
@@ -1036,6 +1140,55 @@ class TaskModal extends Modal {
             });
         });
 
+        // 添加开始时间
+        const startDateContainer = contentEl.createDiv('task-date-container');
+        startDateContainer.createEl('label', { text: '开始时间' });
+        this.startDateInput = startDateContainer.createEl('input', {
+            type: 'datetime-local',
+            attr: { style: 'width: 100%; margin-top: 8px; padding: 4px;' }
+        });
+
+        // 添加隐藏选项（紧跟在开始时间后）
+        const hideContainer = contentEl.createDiv('task-hide-container');
+        hideContainer.createEl('label', { 
+            text: '在开始日期前隐藏任务',
+            attr: { style: 'margin-right: 8px;' }
+        });
+        this.hideBeforeStartToggle = hideContainer.createEl('input', { 
+            type: 'checkbox'
+        });
+
+        // 添加截止时间
+        const dueDateContainer = contentEl.createDiv('task-date-container');
+        dueDateContainer.createEl('label', { text: '截止时间' });
+        this.dueDateInput = dueDateContainer.createEl('input', {
+            type: 'datetime-local',
+            attr: { style: 'width: 100%; margin-top: 8px; padding: 4px;' }
+        });
+
+        // 添加提醒设置
+        const reminderContainer = contentEl.createDiv('task-reminder-container');
+        const reminderLabel = reminderContainer.createEl('label', { text: '开启提醒' });
+        this.reminderToggle = reminderContainer.createEl('input', { 
+            type: 'checkbox',
+            attr: { style: 'margin-left: 8px;' }
+        });
+
+        // 提醒时间选择（默认隐藏）
+        const reminderTimeContainer = contentEl.createDiv('task-reminder-time-container');
+        reminderTimeContainer.style.display = 'none';
+        reminderTimeContainer.createEl('label', { text: '提醒时间' });
+        this.reminderTimeInput = reminderTimeContainer.createEl('input', {
+            type: 'datetime-local',
+            attr: { style: 'width: 100%; margin-top: 8px; padding: 4px;' }
+        });
+
+        // 显示/隐藏提醒时间选择
+        this.reminderToggle.addEventListener('change', (e) => {
+            reminderTimeContainer.style.display = 
+                (e.target as HTMLInputElement).checked ? 'block' : 'none';
+        });
+
         // 按钮容器
         const buttonContainer = contentEl.createDiv('task-button-container');
         
@@ -1048,6 +1201,11 @@ class TaskModal extends Modal {
                     title,
                     category: this.categorySelect.value,
                     type: this.typeSelect.value as 'normal' | 'checkin',
+                    startDate: this.startDateInput.value,
+                    dueDate: this.dueDateInput.value,
+                    reminder: this.reminderToggle.checked,
+                    reminderTime: this.reminderToggle.checked ? this.reminderTimeInput.value : undefined,
+                    hideBeforeStart: this.hideBeforeStartToggle.checked,
                     isUrgent: this.isUrgent,
                     isImportant: this.isImportant
                 });
