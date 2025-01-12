@@ -1,6 +1,6 @@
 import moment from 'moment';
 import { ItemView, WorkspaceLeaf, App, Modal, Setting, Notice, TFile } from 'obsidian';
-import { Task } from './types';
+import { Task, TaskPriority } from './types';
 
 
 export const VIEW_TYPE_TASK_BOARD = 'task-kanban-view';
@@ -27,7 +27,6 @@ interface TaskCompletion {
 
 // 创建反思对话框
 class ReflectionModal extends Modal {
-    private textArea: HTMLTextAreaElement;
     private reflection: string = '';
     private onSubmit: (reflection: string) => void;
 
@@ -39,43 +38,34 @@ class ReflectionModal extends Modal {
     onOpen() {
         const { contentEl } = this;
         contentEl.empty();
-        
-        contentEl.createEl("h2", { text: "完成心得" });
 
-        // 创建并保存文本区域引用
-        this.textArea = contentEl.createEl("textarea", {
-            attr: { 
-                rows: "6",
-                style: "width: 100%; margin-bottom: 1em;"
-            }
-        });
-        
-        // 直接监听 input 事件
-        this.textArea.addEventListener('input', () => {
-            this.reflection = this.textArea.value;
-        });
+        contentEl.createEl('h2', { text: '完成任务' });
 
-        const buttonDiv = contentEl.createEl("div", {
-            attr: { style: "display: flex; justify-content: flex-end; gap: 8px;" }
-        });
-
-        // 添加取消按钮
-        const cancelBtn = buttonDiv.createEl("button", { text: "取消" });
-        cancelBtn.addEventListener('click', () => this.close());
-
-        // 添加提交按钮
-        const submitBtn = buttonDiv.createEl("button", { text: "提交" });
-        submitBtn.addEventListener('click', () => {
-            if (this.reflection.trim()) {
-                this.onSubmit(this.reflection);
-                this.close();
-            } else {
-                new Notice('请输入完成心得');
+        const textArea = contentEl.createEl('textarea', {
+            attr: {
+                placeholder: '记录一下完成心得...',
+                rows: '6',
+                style: 'width: 100%; margin: 10px 0;'
             }
         });
 
-        // 聚焦到文本区域
-        this.textArea.focus();
+        textArea.addEventListener('input', (e) => {
+            this.reflection = (e.target as HTMLTextAreaElement).value;
+        });
+
+        const buttonContainer = contentEl.createEl('div', {
+            cls: 'reflection-button-container'
+        });
+
+        const submitButton = buttonContainer.createEl('button', {
+            text: '提交',
+            cls: 'mod-cta'
+        });
+
+        submitButton.addEventListener('click', () => {
+            this.onSubmit(this.reflection);
+            this.close();
+        });
     }
 
     onClose() {
@@ -178,97 +168,122 @@ export class TaskBoardView extends ItemView {
 
         container.empty();
         
-        tasksToShow.forEach(task => {
-            const taskEl = container.createEl('div', { 
-                cls: `task-item ${task.isUrgent ? 'urgent' : ''} ${task.isImportant ? 'important' : ''}`
-            });
+        const sortedTasks = this.sortTasks(tasksToShow);
+        
+        sortedTasks.forEach(task => {
+            const taskEl = container.createEl('div', { cls: 'task-item' });
+            
+            // 左侧复选框和标签区域
+            const leftSection = taskEl.createEl('div', { cls: 'task-left-section' });
             
             // 复选框
-            const checkbox = taskEl.createEl('input', { 
+            const checkbox = leftSection.createEl('input', {
                 type: 'checkbox',
                 cls: 'task-checkbox'
             });
             checkbox.checked = task.completed;
-            checkbox.addEventListener('change', () => this.toggleTask(task.id));
             
-            // 任务信息容器
-            const infoContainer = taskEl.createEl('div', { cls: 'task-info' });
+            // 添加点击事件处理
+            checkbox.addEventListener('click', (e) => {
+                e.preventDefault();  // 防止立即改变状态
+                this.toggleTask(task.id);
+            });
             
-            // 标签容器
-            const tagsContainer = infoContainer.createEl('div', { cls: 'task-tags' });
+            // 标签区域（紧急、重要、优先级）
+            const tagsSection = leftSection.createEl('div', { cls: 'task-tags-column' });
+            
             if (task.isUrgent) {
-                tagsContainer.createEl('span', { 
-                    text: '紧急',
-                    cls: 'task-tag urgent'
+                tagsSection.createEl('span', { 
+                    cls: 'task-tag urgent',
+                    text: '紧急'
                 });
             }
+            
             if (task.isImportant) {
-                tagsContainer.createEl('span', { 
-                    text: '重要',
-                    cls: 'task-tag important'
+                tagsSection.createEl('span', { 
+                    cls: 'task-tag important',
+                    text: '重要'
                 });
             }
+            
+            if (task.priority && task.priority !== TaskPriority.NONE) {
+                tagsSection.createEl('span', {
+                    cls: `task-priority priority-${task.priority}`,
+                    text: `P: ${task.priority}`
+                });
+            }
+
+            // 中间区域（任务名称和时间信息）
+            const middleSection = taskEl.createEl('div', { cls: 'task-middle-section' });
             
             // 任务标题
-            const titleEl = infoContainer.createEl('span', { 
-                text: task.title,
-                cls: `task-title ${task.completed ? 'completed' : ''} clickable`
+            const titleEl = middleSection.createEl('div', { 
+                cls: 'task-title clickable',
+                text: task.title
             });
-            titleEl.addEventListener('click', () => this.openOrCreateNote(task.title));
             
-            // 在任务信息中添加时间显示
-            if (task.startDate || task.dueDate) {
-                const timeInfo = infoContainer.createEl('div', { cls: 'task-time-info' });
-                if (task.startDate) {
-                    timeInfo.createEl('span', { 
-                        text: `开始：${moment(task.startDate).format('MM-DD HH:mm')}`,
-                        cls: 'task-date start-date'
-                    });
-                }
-                if (task.dueDate) {
-                    timeInfo.createEl('span', { 
-                        text: `截止：${moment(task.dueDate).format('MM-DD HH:mm')}`,
-                        cls: 'task-date due-date'
-                    });
-                }
-                if (task.reminder) {
-                    timeInfo.createEl('span', { 
-                        text: '⏰',
-                        cls: 'task-reminder-icon'
-                    });
-                }
+            // 添加点击事件
+            titleEl.addEventListener('click', () => {
+                this.openOrCreateNote(task.title);
+            });
+            
+            // 时间信息区域
+            const timeInfoSection = middleSection.createEl('div', { cls: 'task-time-info-column' });
+            
+            // 开始时间
+            if (task.startDate) {
+                timeInfoSection.createEl('div', { 
+                    cls: 'task-date start-date',
+                    text: `开始：${moment(task.startDate).format('MM-DD HH:mm')}`
+                });
             }
             
-            // 计时信息
-            const timerContainer = infoContainer.createEl('div', { cls: 'timer-container' });
-            const timeDisplay = timerContainer.createEl('span', {
-                text: this.formatTime(task.timeSpent),
-                cls: 'time-display'
+            // 截止时间
+            if (task.dueDate) {
+                timeInfoSection.createEl('div', { 
+                    cls: 'task-date due-date',
+                    text: `截止：${moment(task.dueDate).format('MM-DD HH:mm')}`
+                });
+            }
+            
+            // 计时器
+            const timerSection = timeInfoSection.createEl('div', { cls: 'timer-container' });
+            const timeDisplay = timerSection.createEl('span', {
+                cls: 'time-display',
+                text: this.formatTime(task.timeSpent)
+            });
+
+            // 右侧按钮区域
+            const buttonSection = taskEl.createEl('div', { cls: 'task-button-column' });
+            
+            // 开始按钮
+            const startBtn = buttonSection.createEl('button', {
+                cls: `timer-btn ${task.isTimerRunning ? 'running' : ''}`,
+                text: task.isTimerRunning ? '暂停' : '开始'
+            });
+            startBtn.addEventListener('click', () => {
+                this.toggleTimer(task.id, timeDisplay);
             });
             
-            // 计时按钮组
-            const btnContainer = timerContainer.createEl('div', { cls: 'timer-btn-group' });
-            
-            // 开始/暂停按钮
-            const timerBtn = btnContainer.createEl('button', {
-                text: task.isTimerRunning ? '暂停' : (task.timeSpent > 0 ? '继续' : '开始'),
-                cls: `timer-btn ${task.isTimerRunning ? 'running' : ''}`
+            // 清零按钮
+            const resetBtn = buttonSection.createEl('button', {
+                cls: 'timer-btn reset',
+                text: '清零'
             });
-            timerBtn.addEventListener('click', () => this.toggleTimer(task.id, timeDisplay));
-            
-            // 清空计时按钮
-            const resetBtn = btnContainer.createEl('button', {
-                text: '清零',
-                cls: 'timer-btn reset'
+            resetBtn.addEventListener('click', () => {
+                this.resetTimer(task.id);
             });
-            resetBtn.addEventListener('click', () => this.resetTimer(task.id));
             
-            // 删除任务按钮
-            const deleteBtn = btnContainer.createEl('button', {
-                text: '删除',
-                cls: 'timer-btn delete'
+            // 删除按钮
+            const deleteBtn = buttonSection.createEl('button', {
+                cls: 'timer-btn delete',
+                text: '删除'
             });
-            deleteBtn.addEventListener('click', () => this.deleteTask(task.id));
+            deleteBtn.addEventListener('click', () => {
+                this.deleteTask(task.id);
+            });
+
+            // ... 事件处理代码 ...
         });
     }
 
@@ -299,11 +314,9 @@ export class TaskBoardView extends ItemView {
             task.timeSpent = 0;
         }
 
+        const button = displayEl.closest('.task-item')?.querySelector('.timer-btn') as HTMLButtonElement;
+        
         if (!task.isTimerRunning) {
-            // 如果是首次启动计时器，记录开始时间
-            if (!task.startedAt) {
-                task.startedAt = Date.now();
-            }
             // 开始计时
             task.isTimerRunning = true;
             task.timerStartTime = Date.now();
@@ -314,7 +327,6 @@ export class TaskBoardView extends ItemView {
             }, 1000);
             
             // 更新按钮状态
-            const button = displayEl.parentElement?.querySelector('.timer-btn') as ObsidianHTMLElement;
             if (button) {
                 button.textContent = '暂停';
                 button.classList.add('running');
@@ -334,7 +346,6 @@ export class TaskBoardView extends ItemView {
             }
             
             // 更新按钮状态
-            const button = displayEl.parentElement?.querySelector('.timer-btn') as ObsidianHTMLElement;
             if (button) {
                 button.textContent = task.timeSpent > 0 ? '继续' : '开始';
                 button.classList.remove('running');
@@ -342,7 +353,6 @@ export class TaskBoardView extends ItemView {
         }
 
         await this.saveData();
-        // 不再重新渲染整个列表
         displayEl.textContent = this.formatTime(task.timeSpent);
     }
 
@@ -540,7 +550,8 @@ export class TaskBoardView extends ItemView {
                     completed: false,
                     timeSpent: 0,
                     isTimerRunning: false,
-                    startedAt: undefined
+                    startedAt: undefined,
+                    priority: result.priority || TaskPriority.NONE
                 });
                 await this.saveData();
                 const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
@@ -578,6 +589,13 @@ export class TaskBoardView extends ItemView {
                     
                     new Notice("任务完成！");
                 }).open();
+            } else {
+                task.completed = false;
+                delete task.completedAt;
+                await this.saveData();
+                const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
+                this.renderTasks(taskList);
+                this.createStatsSection();
             }
         }
     }
@@ -969,6 +987,7 @@ export class TaskBoardView extends ItemView {
             'due: ',
             `progress: ${task.timeSpent > 0 ? Math.floor((task.timeSpent / 3600) * 100) : ''}`,
             `done: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+            `priority: ${task.priority}`,
             'tags:',
             '  - 任务',
             `  - ${task.category || '其他'}`,
@@ -1035,6 +1054,27 @@ export class TaskBoardView extends ItemView {
         }
         // ... 现有代码 ...
     }
+
+    private sortTasks(tasks: Task[]): Task[] {
+        const priorityOrder = {
+            [TaskPriority.HIGH]: 0,    // 高优先级排在最前
+            [TaskPriority.MEDIUM]: 1,
+            [TaskPriority.LOW]: 2,
+            [TaskPriority.NONE]: 3
+        };
+
+        return tasks.sort((a, b) => {
+            // 首先按优先级排序（高优先级在前）
+            const priorityDiff = (priorityOrder[a.priority || TaskPriority.NONE] || 3) 
+                - (priorityOrder[b.priority || TaskPriority.NONE] || 3);
+            if (priorityDiff !== 0) return priorityDiff;
+
+            // 其次按创建时间倒序（新任务在前）
+            const aId = parseInt(a.id || '0');
+            const bId = parseInt(b.id || '0');
+            return bId - aId;  // 新创建的任务 id 更大，所以倒序排列
+        });
+    }
 }
 
 class TaskModal extends Modal {
@@ -1048,6 +1088,7 @@ class TaskModal extends Modal {
     private hideBeforeStartToggle: HTMLInputElement;
     private isUrgent: boolean = false;
     private isImportant: boolean = false;
+    private prioritySelect: HTMLSelectElement;
     private onSubmit: (result: {
         title: string;
         category: string;
@@ -1059,6 +1100,7 @@ class TaskModal extends Modal {
         hideBeforeStart?: boolean;
         isUrgent: boolean;
         isImportant: boolean;
+        priority: TaskPriority;
     } | null) => void;
 
     constructor(app: App, onSubmit: (result: {
@@ -1072,6 +1114,7 @@ class TaskModal extends Modal {
         hideBeforeStart?: boolean;
         isUrgent: boolean;
         isImportant: boolean;
+        priority: TaskPriority;
     } | null) => void) {
         super(app);
         this.onSubmit = onSubmit;
@@ -1189,6 +1232,21 @@ class TaskModal extends Modal {
                 (e.target as HTMLInputElement).checked ? 'block' : 'none';
         });
 
+        // 添加优先级选择（在分类选择后）
+        const priorityContainer = contentEl.createDiv('task-priority-container');
+        priorityContainer.createEl('label', { text: '优先级' });
+        this.prioritySelect = priorityContainer.createEl('select', {
+            attr: { style: 'width: 100%; margin-top: 8px; padding: 4px;' }
+        });
+
+        // 添加优先级选项
+        Object.values(TaskPriority).forEach(priority => {
+            this.prioritySelect.createEl('option', {
+                text: priority,
+                value: priority
+            });
+        });
+
         // 按钮容器
         const buttonContainer = contentEl.createDiv('task-button-container');
         
@@ -1207,7 +1265,8 @@ class TaskModal extends Modal {
                     reminderTime: this.reminderToggle.checked ? this.reminderTimeInput.value : undefined,
                     hideBeforeStart: this.hideBeforeStartToggle.checked,
                     isUrgent: this.isUrgent,
-                    isImportant: this.isImportant
+                    isImportant: this.isImportant,
+                    priority: this.prioritySelect.value as TaskPriority,
                 });
                 this.close();
             } else {

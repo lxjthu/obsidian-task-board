@@ -76,8 +76,8 @@
 
 .task-item {
     display: flex;
-    align-items: center;
-    padding: 8px;
+    gap: 12px;
+    padding: 12px;
     border-radius: 4px;
     margin-bottom: 4px;
     background-color: var(--background-primary);
@@ -116,39 +116,45 @@
     color: var(--text-muted);
 }
 
+/* 计时器按钮样式 */
 .timer-btn {
+    width: 60px;
     font-size: 12px;
-    padding: 2px 6px;
-    border: none;
-    border-radius: 3px;
-    color: var(--text-on-accent);
+    padding: 4px;
+    border-radius: 4px;
     cursor: pointer;
-    transition: background-color 0.2s ease;
+    transition: all 0.2s ease;
+    border: none;
+    margin: 2px 0;
 }
 
-/* 开始按钮 - 使用柔和的绿色 */
+/* 开始/继续按钮（默认状态） */
 .timer-btn:not(.running):not(.reset):not(.delete) {
-    background-color: var(--interactive-success);
+    background-color: #4CAF50;  /* 绿色 */
+    color: white;
 }
 
-/* 运行中按钮 - 使用柔和的黄色 */
+/* 暂停按钮（运行状态） */
 .timer-btn.running {
-    background-color: #e6b800;
+    background-color: #FFA726;  /* 黄色 */
+    color: white;
 }
 
-/* 清零按钮 - 使用柔和的蓝色 */
+/* 清零按钮 */
 .timer-btn.reset {
-    background-color: var(--interactive-accent);
+    background-color: #9E9E9E;  /* 灰色 */
+    color: white;
 }
 
-/* 删除按钮 - 使用柔和的红色 */
+/* 删除按钮 */
 .timer-btn.delete {
-    background-color: #e57373;
+    background-color: #F44336;  /* 红色 */
+    color: white;
 }
 
 /* 悬停效果 */
 .timer-btn:hover {
-    opacity: 0.85;
+    opacity: 0.8;
 }
 
 /* 按钮组样式 */
@@ -463,4 +469,83 @@
 
 .task-hide-container input[type="checkbox"] {
     margin-left: 8px;
+}
+
+.task-priority {
+    font-size: 0.8em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-right: 8px;
+}
+
+.priority-高 {
+    background-color: var(--text-error);
+    color: var(--text-on-accent);
+}
+
+.priority-中 {
+    background-color: var(--text-warning);
+    color: var(--text-on-accent);
+}
+
+.priority-低 {
+    background-color: var(--text-muted);
+    color: var(--text-on-accent);
+}
+
+.task-left-section {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.task-tags-column {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.task-middle-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.task-time-info-column {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-left: 16px;
+}
+
+.task-button-column {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.timer-btn {
+    width: 60px;
+    font-size: 12px;
+    padding: 4px;
+}
+
+.task-tag, .task-priority {
+    font-size: 0.8em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.timer-container {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.time-display {
+    font-family: monospace;
+    color: var(--text-muted);
 }

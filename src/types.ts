@@ -1,3 +1,10 @@
+export enum TaskPriority {
+    HIGH = "高",
+    MEDIUM = "中",
+    LOW = "低",
+    NONE = "无"
+}
+
 export interface Task {
     id: string;
     title: string;
@@ -18,6 +25,7 @@ export interface Task {
     reminder?: boolean;
     reminderTime?: string;
     hideBeforeStart?: boolean;
+    priority: TaskPriority;
 } 
 
 enum TaskCategory {
