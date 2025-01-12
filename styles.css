@@ -102,6 +102,8 @@
 .task-title {
     flex: 1;
     margin-right: 8px;
+    font-size: 1.1em;
+    font-weight: 500;
 }
 
 .timer-container {
@@ -152,9 +154,15 @@
     color: white;
 }
 
-/* 悬停效果 */
+/* 按钮悬停效果 */
 .timer-btn:hover {
-    opacity: 0.8;
+    opacity: 0.85;
+    transform: translateY(-1px);
+}
+
+/* 按钮点击效果 */
+.timer-btn:active {
+    transform: translateY(1px);
 }
 
 /* 按钮组样式 */
@@ -369,6 +377,17 @@
     background-color: #1890ff;
 }
 
+.task-tag.checkin {
+    background-color: #722ed1;  /* 紫色 */
+    color: white;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+}
+
+.task-tag.checkin:hover {
+    opacity: 0.8;
+}
+
 /* 任务项样式更新 */
 .task-item {
     display: flex;
@@ -548,4 +567,26 @@
 .time-display {
     font-family: monospace;
     color: var(--text-muted);
+}
+
+.task-edit-button {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    cursor: pointer;
+    opacity: 0.6;
+    font-size: 14px;
+    transition: opacity 0.2s ease;
+    z-index: 2;
+}
+
+.task-edit-button:hover {
+    opacity: 1;
+}
+
+/* 确保任务项是相对定位的容器 */
+.task-item {
+    position: relative;
+    padding-left: 28px;  /* 为编辑图标留出空间 */
+    /* 现有样式保持不变 */
 }
