@@ -1,24 +1,11 @@
 import moment from 'moment';
 import { ItemView, WorkspaceLeaf, App, Modal, Setting, Notice, TFile } from 'obsidian';
+import { Task } from './types';
+
 
 export const VIEW_TYPE_TASK_BOARD = 'task-kanban-view';
 
 // 将接口移到类的外部
-interface Task {
-    id: string;
-    title: string;
-    isUrgent: boolean;    // 新增：紧急标签
-    isImportant: boolean; // 新增：重要标签
-    completed: boolean;
-    completedBy?: string;
-    completedAt?: number;
-    startedAt?: number;
-    description?: string;
-    timeSpent: number;
-    isTimerRunning: boolean;
-    timerStartTime?: number;
-}
-
 interface TaskBoardData {
     users: any[];
     tasks: Task[];
@@ -500,9 +487,12 @@ export class TaskBoardView extends ItemView {
     private async showAddTaskModal() {
         const modal = new TaskModal(this.app, async (result) => {
             if (result) {
+                console.log('Creating task with:', result); // 调试日志
                 this.data.tasks.push({
                     id: Date.now().toString(),
                     title: result.title,
+                    category: result.category,
+                    type: result.type,  // 确保这里设置了 type
                     isUrgent: result.isUrgent,
                     isImportant: result.isImportant,
                     completed: false,
@@ -530,40 +520,70 @@ export class TaskBoardView extends ItemView {
                     task.completedBy = this.data.currentUserId;
                     task.completedAt = Date.now();
 
-                    // 更新对应笔记的 frontmatter
-                    await this.updateNoteFrontmatter(task);
-                    
-                    // 添加完成记录到笔记中
-                    await this.addCompletionToNote(task, reflection);
-                    
-                    this.completions.push({
-                        taskName: task.title,
-                        reflection: reflection,
-                        timestamp: Date.now(),
-                        startedAt: task.startedAt,
-                        completedAt: Date.now(),
-                        timeSpent: task.timeSpent
-                    });
+                    // 处理打卡任务
+                    if (task.type === 'checkin') {
+                        await this.handleCheckinTaskCompletion(task, reflection);
+                    } else {
+                        // 处理普通任务
+                        await this.updateNoteFrontmatter(task);
+                        await this.addCompletionToNote(task, reflection);
+                    }
 
                     await this.saveData();
-                    this.renderTasks(this.contentEl.querySelector('.task-list') as ObsidianHTMLElement);
+                    const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
+                    this.renderTasks(taskList);
                     this.createStatsSection();
                     
                     new Notice("任务完成！");
                 }).open();
-            } else {
-                task.completed = false;
-                delete task.completedBy;
-                delete task.completedAt;
-                
-                // 更新对应笔记的 frontmatter
-                await this.updateNoteFrontmatter(task);
-                
-                await this.saveData();
-                this.renderTasks(this.contentEl.querySelector('.task-list') as ObsidianHTMLElement);
-                this.createStatsSection();
             }
         }
+    }
+
+    private async handleCheckinTaskCompletion(task: Task, reflection: string) {
+        // 创建打卡文件夹
+        const folderPath = `tasks/${task.title}/打卡记录`;
+        if (!(await this.app.vault.adapter.exists(folderPath))) {
+            await this.app.vault.createFolder(folderPath);
+        }
+
+        // 创建今日打卡记录
+        const today = moment().format('YYYY-MM-DD');
+        const currentTime = moment().format('HH:mm:ss');
+        const checkinPath = `${folderPath}/${today}.md`;
+        
+        const checkinContent = [
+            '---',
+            `task: ${task.title}`,
+            `date: ${today}`,
+            `time: ${currentTime}`,  // 添加具体时间
+            `type: checkin`,
+            'tags:',
+            '  - 打卡',
+            `  - ${task.category || '其他'}`,
+            '---',
+            '',
+            `# ${task.title} - ${today} 打卡记录`,
+            '',
+            '## 完成情况',
+            `- 完成时间：${moment().format('YYYY-MM-DD HH:mm:ss')}`,
+            `- 用时：${this.formatTime(task.timeSpent)}`,
+            '',
+            '## 今日心得',
+            reflection,
+            '',
+            '## 明日计划',
+            '',
+        ].join('\n');
+
+        await this.app.vault.create(checkinPath, checkinContent);
+
+        // 重置任务完成状态（为明天准备）
+        setTimeout(() => {
+            task.completed = false;
+            delete task.completedAt;
+            this.saveData();
+        }, 0);
     }
 
     private async resetTimer(taskId: string) {
@@ -573,7 +593,8 @@ export class TaskBoardView extends ItemView {
             task.isTimerRunning = false;
             delete task.timerStartTime;
             await this.saveData();
-            this.renderTasks(this.contentEl.querySelector('.task-list') as ObsidianHTMLElement);
+            const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
+            this.renderTasks(taskList);
         }
     }
 
@@ -583,7 +604,8 @@ export class TaskBoardView extends ItemView {
             this.data.tasks.splice(taskIndex, 1);
             await this.saveData();
             // 更新任务列表和完成记录
-            this.renderTasks(this.contentEl.querySelector('.task-list') as ObsidianHTMLElement);
+            const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
+            this.renderTasks(taskList);
             this.createStatsSection();
         }
     }
@@ -682,51 +704,48 @@ export class TaskBoardView extends ItemView {
     }
 
     private async openOrCreateNote(taskTitle: string) {
-        const fileName = taskTitle.replace(/[\\/:*?"<>|]/g, '');
-        const filePath = `tasks/${fileName}.md`;
-        
-        // 获取当前任务对象
-        const task = this.data.tasks.find(t => t.title === taskTitle);
-        if (!task) return;
-
-        // 生成 frontmatter 和笔记内容
-        const noteContent = [
-            '---',
-            `alias: ${taskTitle}`,
-            `status: ${task.completed ? '已完成' : '进行中'}`,
-            `created: ${moment().format('YYYY-MM-DD')}`,
-            'due: ',  // 留空
-            `progress: ${task.timeSpent > 0 ? Math.floor((task.timeSpent / 3600) * 100) : ''}`,
-            `done: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
-            'tags:',
-            '  - 任务',
-            ...(task.isUrgent ? ['  - 紧急'] : []),
-            ...(task.isImportant ? ['  - 重要'] : []),
-            '---',
-            '',
-            `# ${taskTitle}`,
-            '',
-            '## 任务详情',
-            '',
-            '## 进展记录',
-            '',
-            '## 完成情况记录',
-            '',
-            '## 相关链接',
-            ''
-        ].join('\n');
-
         try {
+            const task = this.data.tasks.find(t => t.title === taskTitle);
+            if (!task) {
+                console.log('Task not found:', taskTitle);
+                return;
+            }
+
+            console.log('Opening task:', task); // 调试日志
+
+            const fileName = taskTitle.replace(/[\\/:*?"<>|]/g, '');
+            const filePath = task.type === 'checkin' 
+                ? `tasks/${fileName}/README.md`
+                : `tasks/${fileName}.md`;
+
+            console.log('File path:', filePath); // 调试日志
+
             // 确保 tasks 文件夹存在
             if (!(await this.app.vault.adapter.exists('tasks'))) {
+                console.log('Creating tasks folder'); // 调试日志
                 await this.app.vault.createFolder('tasks');
+            }
+
+            // 如果是打卡任务，确保任务文件夹存在
+            if (task.type === 'checkin') {
+                const taskFolderPath = `tasks/${fileName}`;
+                console.log('Creating task folder:', taskFolderPath); // 调试日志
+                if (!(await this.app.vault.adapter.exists(taskFolderPath))) {
+                    await this.app.vault.createFolder(taskFolderPath);
+                }
             }
 
             // 检查笔记是否存在
             const exists = await this.app.vault.adapter.exists(filePath);
+            console.log('File exists:', exists); // 调试日志
             
             if (!exists) {
                 // 创建新笔记
+                const noteContent = task.type === 'checkin' 
+                    ? this.generateCheckinTaskContent(task)
+                    : this.generateNormalTaskContent(task);
+                
+                console.log('Creating new note with content'); // 调试日志
                 await this.app.vault.create(filePath, noteContent);
             }
 
@@ -736,9 +755,58 @@ export class TaskBoardView extends ItemView {
                 await this.app.workspace.getLeaf(false).openFile(file);
             }
         } catch (error) {
-            new Notice('打开或创建笔记时出错');
-            console.error(error);
+            console.error('Error in openOrCreateNote:', error); // 错误日志
+            new Notice(`创建笔记失败: ${error.message}`);
         }
+    }
+
+    private generateCheckinTaskContent(task: Task): string {
+        const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        return [
+            '---',
+            `alias: ${task.title}`,
+            `type: checkin-task`,
+            `category: ${task.category || '其他'}`,
+            'tags:',
+            '  - 打卡任务',
+            `  - ${task.category || '其他'}`,
+            '---',
+            '',
+            `# ${task.title} - 打卡任务`,
+            '',
+            '## 任务说明',
+            '',
+            '## 打卡记录',
+            '```dataview',
+            'TABLE date as 日期, time as 完成时间',
+            `FROM "tasks/${fileName}/打卡记录"`,
+            'SORT date DESC',
+            '```',
+            '',
+            '## 统计分析',
+            '### 打卡频率',
+            '```dataview',
+            'CALENDAR date',
+            `FROM "tasks/${fileName}/打卡记录"`,
+            '```',
+            '',
+            '### 打卡统计',
+            '```dataview',
+            'TABLE length(rows) as 打卡次数',
+            `FROM "tasks/${fileName}/打卡记录"`,
+            'GROUP BY dateformat(date, "yyyy-MM") as 月份',
+            'SORT 月份 DESC',
+            '```',
+            '',
+            '### 最近打卡',
+            '```dataview',
+            'LIST WITHOUT ID time + " - " + dateformat(date, "yyyy-MM-dd")',
+            `FROM "tasks/${fileName}/打卡记录"`,
+            'SORT date DESC',
+            'LIMIT 5',
+            '```',
+            '',
+        ].join('\n');
     }
 
     // 添加更新笔记 frontmatter 的方法
@@ -820,20 +888,84 @@ export class TaskBoardView extends ItemView {
             new Notice('添加完成记录到笔记失败');
         }
     }
+
+    private setupDragAndDrop(container: HTMLElement, category: string): void {
+        container.setAttribute("data-category", category);
+        
+        // 允许放置
+        container.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            container.addClass("drag-over");
+        });
+        
+        // 处理放置
+        container.addEventListener("drop", async (e) => {
+            e.preventDefault();
+            container.removeClass("drag-over");
+            
+            const taskId = e.dataTransfer?.getData("taskId");
+            if (!taskId) return;
+
+            const task = this.data.tasks.find(t => t.id === taskId);
+            
+            if (task && task.category !== category) {
+                task.category = category;
+                await this.saveData();
+                const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
+                this.renderTasks(taskList);
+            }
+        });
+    }
+
+    private generateNormalTaskContent(task: Task): string {
+        return [
+            '---',
+            `alias: ${task.title}`,
+            `status: ${task.completed ? '已完成' : '进行中'}`,
+            `created: ${moment().format('YYYY-MM-DD')}`,
+            'due: ',
+            `progress: ${task.timeSpent > 0 ? Math.floor((task.timeSpent / 3600) * 100) : ''}`,
+            `done: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+            'tags:',
+            '  - 任务',
+            `  - ${task.category || '其他'}`,
+            ...(task.isUrgent ? ['  - 紧急'] : []),
+            ...(task.isImportant ? ['  - 重要'] : []),
+            '---',
+            '',
+            `# ${task.title}`,
+            '',
+            '## 任务详情',
+            `- 分类：${task.category || '其他'}`,
+            '',
+            '## 进展记录',
+            '',
+            '## 完成情况记录',
+            '',
+            '## 相关链接',
+            ''
+        ].join('\n');
+    }
 }
 
 class TaskModal extends Modal {
     private titleInput: HTMLInputElement;
+    private categorySelect: HTMLSelectElement;
+    private typeSelect: HTMLSelectElement;
     private isUrgent: boolean = false;
     private isImportant: boolean = false;
     private onSubmit: (result: { 
         title: string, 
+        category: string,
+        type: 'normal' | 'checkin',
         isUrgent: boolean, 
         isImportant: boolean 
     } | null) => void;
 
     constructor(app: App, onSubmit: (result: { 
         title: string, 
+        category: string,
+        type: 'normal' | 'checkin',
         isUrgent: boolean, 
         isImportant: boolean 
     } | null) => void) {
@@ -846,14 +978,28 @@ class TaskModal extends Modal {
         contentEl.empty();
         contentEl.createEl('h2', { text: '添加新任务' });
 
-        // 直接创建输入框
+        // 任务名称输入
         const inputContainer = contentEl.createDiv('task-input-container');
         inputContainer.createEl('label', { text: '任务名称' });
         this.titleInput = inputContainer.createEl('input', {
             type: 'text',
-            attr: {
-                style: 'width: 100%; margin-top: 8px; padding: 4px;'
-            }
+            attr: { style: 'width: 100%; margin-top: 8px; padding: 4px;' }
+        });
+
+        // 分类选择
+        const categoryContainer = contentEl.createDiv('task-category-container');
+        categoryContainer.createEl('label', { text: '任务分类' });
+        this.categorySelect = categoryContainer.createEl('select', {
+            attr: { style: 'width: 100%; margin-top: 8px; padding: 4px;' }
+        });
+
+        // 添加分类选项
+        const categories = ['工作', '学习', '生活', '项目', '其他'];
+        categories.forEach(category => {
+            const option = this.categorySelect.createEl('option', {
+                text: category,
+                value: category
+            });
         });
 
         // 紧急标签切换
@@ -872,6 +1018,24 @@ class TaskModal extends Modal {
             this.isImportant = (e.target as HTMLInputElement).checked;
         });
 
+        // 添加任务类型选择
+        const typeContainer = contentEl.createDiv('task-type-container');
+        typeContainer.createEl('label', { text: '任务类型' });
+        this.typeSelect = typeContainer.createEl('select', {
+            attr: { style: 'width: 100%; margin-top: 8px; padding: 4px;' }
+        });
+
+        // 添加任务类型选项
+        [
+            { value: 'normal', text: '普通任务' },
+            { value: 'checkin', text: '打卡任务' }
+        ].forEach(type => {
+            this.typeSelect.createEl('option', {
+                value: type.value,
+                text: type.text
+            });
+        });
+
         // 按钮容器
         const buttonContainer = contentEl.createDiv('task-button-container');
         
@@ -881,7 +1045,9 @@ class TaskModal extends Modal {
             const title = this.titleInput.value.trim();
             if (title) {
                 this.onSubmit({
-                    title: title,
+                    title,
+                    category: this.categorySelect.value,
+                    type: this.typeSelect.value as 'normal' | 'checkin',
                     isUrgent: this.isUrgent,
                     isImportant: this.isImportant
                 });
