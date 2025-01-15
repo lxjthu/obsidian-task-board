@@ -145,15 +145,79 @@ export class TaskBoardView extends ItemView {
     }
 
     private createTaskSection() {
-        const taskSection = this.contentEl.createEl('div', { cls: 'task-board-task-section' });
+        const taskSection = this.contentEl.createEl("div", { cls: "task-board-task-section" });
+        const addButton = taskSection.createEl("button", { text: "\u6DFB\u52A0\u4EFB\u52A1" });
+        addButton.addEventListener("click", () => this.showAddTaskModal());
         
-        // 添加任务按钮
-        const addButton = taskSection.createEl('button', { text: '添加任务' });
-        addButton.addEventListener('click', () => this.showAddTaskModal());
+        const importButton = taskSection.createEl("button", { text: "\u4ECE\u7B14\u8BB0\u5BFC\u5165" });
+        importButton.addEventListener("click", () => this.importFromObsidian());
         
-        // 任务列表
-        const taskList = taskSection.createEl('div', { cls: 'task-list' });
+        const taskList = taskSection.createEl("div", { cls: "task-list" });
         this.renderTasks(taskList);
+    }
+
+
+    private async importFromObsidian() {
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile) {
+            new Notice('请先打开包含任务列表的笔记');
+            return;
+        }
+    
+        try {
+            const content = await this.app.vault.read(activeFile);
+            const tasks = this.parseObsidianTasksToBoard(content);
+            
+            if (tasks.length === 0) {
+                new Notice('未在当前笔记中找到任务');
+                return;
+            }
+    
+            // 添加新任务
+            this.data.tasks.push(...tasks);
+            
+            // 保存并更新界面
+            await this.saveData();
+            const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
+            if (taskList) {
+                this.renderTasks(taskList);
+            }
+            
+            new Notice(`成功导入 ${tasks.length} 个任务`);
+        } catch (error) {
+            console.error('导入失败:', error);
+            new Notice('导入失败，请检查笔记格式');
+        }
+    }
+
+    private parseObsidianTasksToBoard(content: string): Task[] {
+        // 创建空数组存储解析后的任务
+        const tasks: Task[] = [];
+        
+        // 按行分割内容，只保留包含任务标记的行
+        const taskLines = content.split('\n').filter(line => 
+            line.includes('- [ ]') || line.includes('- [x]')
+        );
+        
+        // 处理每一行任务
+        taskLines.forEach(line => {
+            // 检查任务是否完成
+            const completed = line.includes('- [x]');
+            // 提取任务标题（去掉checkbox标记）
+            const title = line.replace(/^- \[[x ]\] /, '').trim();
+            
+            // 创建新的任务对象
+            tasks.push({
+                id: Date.now().toString(),
+                title,
+                completed,
+                timeSpent: 0,
+                isTimerRunning: false,
+                priority: TaskPriority.NONE
+            });
+        });
+        
+        return tasks;
     }
 
     private renderTasks(container: ObsidianHTMLElement) {

@@ -19,7 +19,7 @@
 
 /* 任务区域样式 */
 .task-board-task-section {
-    margin: 20px 0;
+    margin: 1em 0;
 }
 
 /* 统计区域样式 */
@@ -589,4 +589,15 @@
     position: relative;
     padding-left: 28px;  /* 为编辑图标留出空间 */
     /* 现有样式保持不变 */
+}
+
+.task-buttons {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 1em;
+}
+
+.task-buttons button {
+    padding: 4px 8px;
+    cursor: pointer;
 }
