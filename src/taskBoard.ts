@@ -1,6 +1,7 @@
 import moment from 'moment';
 import { ItemView, WorkspaceLeaf, App, Modal, Setting, Notice, TFile } from 'obsidian';
 import { Task, TaskPriority } from './types';
+import * as yaml from 'js-yaml';
 
 
 export const VIEW_TYPE_TASK_BOARD = 'task-kanban-view';
@@ -156,6 +157,25 @@ export class TaskBoardView extends ItemView {
         this.renderTasks(taskList);
     }
 
+    private sortTasks(tasks: Task[]): Task[] {
+        const priorityOrder = {
+            [TaskPriority.HIGHEST]: 5,
+            [TaskPriority.HIGH]: 4,
+            [TaskPriority.MEDIUM]: 3,
+            [TaskPriority.LOW]: 2,
+            [TaskPriority.LOWEST]: 1,
+            [TaskPriority.NONE]: 0
+        };
+        
+        return tasks.sort((a, b) => {
+            const priorityDiff = (priorityOrder[b.priority as TaskPriority || TaskPriority.NONE] - 
+                        priorityOrder[a.priority as TaskPriority || TaskPriority.NONE])
+            if (priorityDiff !== 0) return priorityDiff;
+            
+            return 0;
+        });
+    }
+
 
     private async importFromObsidian() {
         const activeFile = this.app.workspace.getActiveFile();
@@ -173,17 +193,23 @@ export class TaskBoardView extends ItemView {
                 return;
             }
     
-            // 添加新任务
-            this.data.tasks.push(...tasks);
-            
-            // 保存并更新界面
-            await this.saveData();
-            const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
-            if (taskList) {
-                this.renderTasks(taskList);
-            }
-            
-            new Notice(`成功导入 ${tasks.length} 个任务`);
+            // 显示导入预览对话框
+            new TaskImportModal(this.app, tasks, async (selectedTasks) => {
+                if (selectedTasks.length === 0) {
+                    new Notice('未选择任何任务');
+                    return;
+                }
+                
+                this.data.tasks.push(...selectedTasks);
+                await this.saveData();
+                const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
+                if (taskList) {
+                    this.renderTasks(taskList);
+                }
+                
+                new Notice(`成功导入 ${selectedTasks.length} 个任务`);
+            }).open();
+    
         } catch (error) {
             console.error('导入失败:', error);
             new Notice('导入失败，请检查笔记格式');
@@ -191,35 +217,167 @@ export class TaskBoardView extends ItemView {
     }
 
     private parseObsidianTasksToBoard(content: string): Task[] {
-        // 创建空数组存储解析后的任务
         const tasks: Task[] = [];
-        
-        // 按行分割内容，只保留包含任务标记的行
         const taskLines = content.split('\n').filter(line => 
             line.includes('- [ ]') || line.includes('- [x]')
         );
         
-        // 处理每一行任务
-        taskLines.forEach(line => {
-            // 检查任务是否完成
+        taskLines.forEach((line, index) => {
             const completed = line.includes('- [x]');
-            // 提取任务标题（去掉checkbox标记）
-            const title = line.replace(/^- \[[x ]\] /, '').trim();
+            // 对输入的文本进行 Unicode 标准化处理
+            let title = line.replace(/^- \[[x ]\] /, '').trim()
+                .normalize('NFKC');  // 添加这一行进行标准化
             
-            // 创建新的任务对象
-            tasks.push({
-                id: Date.now().toString(),
-                title,
+            // 初始化任务属性
+            const task: Task = {
+                id: `import-${Date.now()}-${index}`,
+                title: '',
                 completed,
                 timeSpent: 0,
                 isTimerRunning: false,
-                priority: TaskPriority.NONE
+                priority: TaskPriority.NONE,
+                isUrgent: false,
+                isImportant: false,
+                category: '',
+                startDate: undefined,
+                dueDate: undefined,
+                reminder: false,        // 添加提醒属性
+                reminderTime: undefined, // 添加提醒时间属性
+                actualStartTime: undefined,      // 任务首次开始时间
+                timeRecords: [], // 每天的时间记录
+                totalTimeSpent: 0,        // 总计用时
+            };
+            
+             // 检查是否为打卡任务（在处理其他标签之前）
+                if (title.includes('#打卡') || 
+                title.includes('#checkin') || 
+                title.toLowerCase().includes('打卡')) {  // 也可以根据任务标题判断
+                task.type = 'checkin';  // 设置任务类型为打卡
+                // 移除打卡标签
+                title = title.replace(/#打卡|#checkin/g, '');
+            }
+
+            // 解析日期标签
+            // 1. 先尝试匹配带标记的日期
+            const startDateMatch = title.match(/\[start\]\s*(\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?)/);
+            if (startDateMatch) {
+                task.startDate = startDateMatch[1];
+                if (!task.reminderTime) {
+                    task.reminder = true;
+                    task.reminderTime = startDateMatch[1];
+                }
+                // 移除匹配到的日期标记
+                title = title.replace(/\[start\]\s*\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?/, '');
+            }
+
+            const dueDateMatch = title.match(/\[due\]\s*(\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?)/);
+            if (dueDateMatch) {
+                task.dueDate = dueDateMatch[1];
+                task.reminder = true;
+                task.reminderTime = dueDateMatch[1];
+                // 移除匹配到的日期标记
+                title = title.replace(/\[due\]\s*\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?/, '');
+            }
+
+            // 2. 如果没有匹配到带标记的日期，尝试匹配带图标的日期
+            if (!task.startDate) {
+                const iconStartMatch = title.match(/[🛫✈️🚀]\s*(\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?)/);
+                if (iconStartMatch) {
+                    task.startDate = iconStartMatch[1];
+                    title = title.replace(/[🛫✈️🚀]\s*\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?\s*/, '');  // 添加末尾的 \s*
+                }
+            }
+
+            if (!task.dueDate) {
+                const iconDueMatch = title.match(/[📅⏰🗓️]\s*(\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?)/);
+                if (iconDueMatch) {
+                    task.dueDate = iconDueMatch[1];
+                    title = title.replace(/[📅⏰🗓️]\s*\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?\s*/, '');  // 添加末尾的 \s*
+                }
+            }
+
+            // 3. 如果还没有匹配到日期，则按顺序处理剩余的日期
+            // 第一个日期作为开始时间，第二个日期作为截止时间
+            const remainingDates = title.match(/\b\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?\b/g) || [];
+            if (remainingDates.length > 0) {
+                if (!task.startDate) {
+                    task.startDate = remainingDates[0];
+                }
+                if (!task.dueDate && remainingDates.length > 1) {
+                    task.dueDate = remainingDates[1];
+                }
+                // 移除所有已处理的日期
+                remainingDates.forEach(date => {
+                    title = title.replace(date, '');
+                });
+            }
+            
+            const priorityMatch = title.match(/([🔺⏫🔼🔽⏬])/);
+            if (priorityMatch) {
+            switch (priorityMatch[1]) {
+                case '🔺':
+                    task.priority = TaskPriority.HIGHEST;
+                    break;
+                case '⏫':
+                    task.priority = TaskPriority.HIGH;
+                    break;
+                case '🔼':
+                    task.priority = TaskPriority.MEDIUM;
+                    break;
+                case '🔽':
+                    task.priority = TaskPriority.LOW;
+                    break;
+                case '⏬':
+                    task.priority = TaskPriority.LOWEST;
+                    break;
+            }
+           // 移除优先级符号
+            title = title.replace(/[🔺⏫🔼🔽⏬]/, '');
+        }
+            // 解析标签
+            const tags = title.match(/#[\w\u4e00-\u9fa5]+/g) || [];
+            
+            tags.forEach(tag => {
+                const tagText = tag.substring(1).toLowerCase();
+                
+                // 检查优先级
+                if (tagText === '最高' || tagText === 'highest') {
+                    task.priority = TaskPriority.HIGHEST;
+                } else if (tagText === '高' || tagText === 'high') {
+                    task.priority = TaskPriority.HIGH;
+                } else if (tagText === '中' || tagText === 'medium') {
+                    task.priority = TaskPriority.MEDIUM;
+                } else if (tagText === '低' || tagText === 'low') {
+                    task.priority = TaskPriority.LOW;
+                } else if (tagText === '最低' || tagText === 'lowest') {
+                    task.priority = TaskPriority.LOWEST;
+                }
+                
+                // 检查紧急/重要标记
+                if (tagText === '紧急' || tagText === 'urgent') {
+                    task.isUrgent = true;
+                }
+                if (tagText === '重要' || tagText === 'important') {
+                    task.isImportant = true;
+                }
+                
+                // 检查分类（排除特定标签）
+                if (!['高', 'high', '中', 'medium', '低', 'low', 
+                     '紧急', 'urgent', '重要', 'important', 
+                     'task' // 添加 task 到排除列表
+                    ].includes(tagText)) {
+                    task.category = tagText;
+                }
             });
+            
+            // 移除标签，只保留任务标题
+            task.title = title.replace(/#[\w\u4e00-\u9fa5]+/g, '').trim();
+            
+            tasks.push(task);
         });
         
         return tasks;
     }
-
     private renderTasks(container: ObsidianHTMLElement) {
         // 过滤任务
         const tasksToShow = this.data.tasks.filter(task => {
@@ -286,9 +444,17 @@ export class TaskBoardView extends ItemView {
             }
             
             if (task.priority && task.priority !== TaskPriority.NONE) {
+                const prioritySymbols = {
+                    [TaskPriority.HIGHEST]: '🔺',
+                    [TaskPriority.HIGH]: '⏫',
+                    [TaskPriority.MEDIUM]: '🔼',
+                    [TaskPriority.LOW]: '🔽',
+                    [TaskPriority.LOWEST]: '⏬'
+                };
+                
                 tagsSection.createEl('span', {
-                    cls: `task-priority priority-${task.priority}`,
-                    text: `P: ${task.priority}`
+                    cls: `task-priority priority-${task.priority.toLowerCase()}`,
+                    text: prioritySymbols[task.priority] || ''
                 });
             }
 
@@ -340,9 +506,11 @@ export class TaskBoardView extends ItemView {
             
             // 计时器
             const timerSection = timeInfoSection.createEl('div', { cls: 'timer-container' });
+            const today = moment().format('YYYY-MM-DD');
+            const todayRecord = task.timeRecords?.find(r => r.date === today);
             const timeDisplay = timerSection.createEl('span', {
                 cls: 'time-display',
-                text: this.formatTime(task.timeSpent)
+                text: this.formatTime(todayRecord?.dailyTimeSpent || 0)  // 使用当日用时
             });
 
             // 右侧按钮区域
@@ -415,10 +583,12 @@ export class TaskBoardView extends ItemView {
         const task = this.data.tasks.find(t => t.id === taskId);
         if (!task) return;
 
-        // 确保 timeSpent 有初始值
-        if (typeof task.timeSpent !== 'number') {
-            task.timeSpent = 0;
-        }
+        // 初始化时间记录相关属性
+        if (!task.timeRecords) task.timeRecords = [];
+        if (!task.totalTimeSpent) task.totalTimeSpent = 0;
+
+        const today = moment().format('YYYY-MM-DD');
+        let todayRecord = task.timeRecords.find(r => r.date === today);
 
         // 获取按钮元素
         const button = timeDisplay.closest('.task-item')?.querySelector('.timer-btn') as HTMLButtonElement;
@@ -429,11 +599,71 @@ export class TaskBoardView extends ItemView {
             task.isTimerRunning = false;
             const now = Date.now();
             const elapsed = now - (task.timerStartTime || 0);
-            task.timeSpent = (task.timeSpent || 0) + Math.floor(elapsed / 1000);  // 转换为秒
+            
+            if (task.type === 'checkin') {
+                // 打卡任务记录当天用时和时间段
+               
+                // 初始化或获取今天的记录
+                if (!todayRecord) {
+                    task.timeSpent = Math.floor(elapsed / 1000);  // 只计算今天的第一段时间
+        
+                    todayRecord = {
+                        date: today,
+                        startTime: task.timerStartTime || now,
+                        pauseTimes: [],
+                        dailyTimeSpent: task.timeSpent
+                    };
+                    task.timeRecords.push(todayRecord);
+                } else {
+                    // 同一天，累加时间
+                    task.timeSpent = (task.timeSpent || 0) + Math.floor(elapsed / 1000);
+                    todayRecord.dailyTimeSpent = task.timeSpent;  // 更新当日用时
+                }
+                
+                // 记录本次持续时间段
+                todayRecord.pauseTimes.push({
+                    start: task.timerStartTime || 0,
+                    end: now
+                });
+                
+                await this.updateTaskTimeRecord(task, 'pause', elapsed);
+            } else {
+                 // 非打卡任务记录累计用时
+                
+                task.totalTimeSpent = (task.totalTimeSpent || 0) + Math.floor(elapsed / 1000);
+                
+                // 初始化或获取今天的记录
+                if (!todayRecord) {
+                    todayRecord = {
+                        date: today,
+                        startTime: task.actualStartTime || now,
+                        pauseTimes: [],
+                        dailyTimeSpent: 0
+                    };
+                    task.timeRecords.push(todayRecord);
+                    task.timeSpent = 0;  // 重置当日计时
+                }
+
+                // 更新当日用时
+                task.timeSpent = (task.timeSpent || 0) + Math.floor(elapsed / 1000);
+                todayRecord.dailyTimeSpent = task.timeSpent;
+                            
+                // 记录本次持续时间段
+                todayRecord.pauseTimes.push({
+                    start: task.timerStartTime || 0,
+                    end: now
+                });
+                todayRecord.dailyTimeSpent = task.timeSpent;
+                
+                await this.updateTaskTimeRecord(task, 'pause', elapsed);
+            }
+
+
             delete task.timerStartTime;
+            await this.updateNoteFrontmatter(task);
             
             // 更新按钮状态
-            button.textContent = task.timeSpent > 0 ? '继续' : '开始';
+            button.textContent = '继续';
             button.classList.remove('running');
             
             // 清除更新间隔
@@ -441,13 +671,42 @@ export class TaskBoardView extends ItemView {
                 clearInterval(this.data.timers[taskId]);
                 delete this.data.timers[taskId];
             }
-            
-            // 记录暂停时间
-            await this.updateTaskTimeRecord(task, 'pause', elapsed);
         } else {
-            // 开始计时器
+            // 开始/继续计时器
             task.isTimerRunning = true;
-            task.timerStartTime = Date.now();
+            const now = Date.now();
+            task.timerStartTime = now;
+            
+            if (task.type === 'checkin') {
+                // 打卡任务每天重置
+                const lastStartDate = task.timerStartTime 
+                    ? moment(task.timerStartTime).format('YYYY-MM-DD')
+                    : null;
+                
+                if (!lastStartDate || lastStartDate !== today) {
+                    task.timeSpent = 0;  // 新的一天重置时间
+                    await this.updateTaskTimeRecord(task, 'start');
+                } else {
+                    await this.updateTaskTimeRecord(task, 'resume');
+                }
+            } else {
+                if (!task.actualStartTime) {
+                    task.actualStartTime = now;
+                    // 初始化今天的记录
+                    todayRecord = {
+                        date: today,
+                        startTime: now,
+                        pauseTimes: [],
+                        dailyTimeSpent: 0
+                    };
+                    task.timeRecords.push(todayRecord);
+                    await this.updateTaskTimeRecord(task, 'start');
+                } else {
+                    await this.updateTaskTimeRecord(task, 'resume');
+                }
+            }
+
+            await this.updateNoteFrontmatter(task);
             
             // 更新按钮状态
             button.textContent = '暂停';
@@ -456,75 +715,193 @@ export class TaskBoardView extends ItemView {
             // 设置实时更新
             this.data.timers[taskId] = window.setInterval(() => {
                 if (task.isTimerRunning && task.timerStartTime) {
-                    const now = Date.now();
-                    const totalSeconds = task.timeSpent + Math.floor((now - task.timerStartTime) / 1000);
+                    const currentTime = Date.now();
+                    const totalSeconds = task.timeSpent + Math.floor((currentTime - task.timerStartTime) / 1000);
                     timeDisplay.textContent = this.formatTime(totalSeconds);
                 }
             }, 1000);
-            
-            // 如果是第一次开始，记录实际开始时间
-            if (!task.startedAt) {
-                task.startedAt = task.timerStartTime;
-                await this.updateTaskNoteAfterEdit(task);
-            }
-            // 记录继续时间
-            await this.updateTaskTimeRecord(task, 'resume');
         }
 
         await this.saveData();
         timeDisplay.textContent = this.formatTime(task.timeSpent || 0);
-    }
 
-    private async updateTaskTimeRecord(task: Task, action: 'start' | 'pause' | 'resume', elapsed?: number) {
+        // 打开对应的笔记
         const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
-        const filePath = `tasks/${fileName}.md`;
+        const filePath = task.type === 'checkin'
+            ? `tasks/${fileName}/打卡记录/${moment().format('YYYY-MM-DD')}.md`
+            : `tasks/${fileName}.md`;
 
         try {
-            if (await this.app.vault.adapter.exists(filePath)) {
-                const file = this.app.vault.getAbstractFileByPath(filePath);
-                if (file instanceof TFile) {
-                    let content = await this.app.vault.read(file);
+            // 检查文件是否存在
+            if (!await this.app.vault.adapter.exists(filePath)) {
+                // 如果是打卡任务，确保文件夹结构存在
+                if (task.type === 'checkin') {
+                    const taskFolder = `tasks/${fileName}`;
+                    const recordsFolder = `${taskFolder}/打卡记录`;
                     
-                    // 保存原有的 frontmatter
-                    let frontmatter = '';
-                    const frontmatterMatch = content.match(/^---\n[\s\S]*?\n---/);
-                    if (frontmatterMatch) {
-                        frontmatter = frontmatterMatch[0] + '\n';
-                        content = content.slice(frontmatterMatch[0].length).trim();
+                    if (!await this.app.vault.adapter.exists(taskFolder)) {
+                        await this.app.vault.createFolder(taskFolder);
+                    }
+                    if (!await this.app.vault.adapter.exists(recordsFolder)) {
+                        await this.app.vault.createFolder(recordsFolder);
                     }
                     
-                    // 格式化时间记录
-                    const timeRecord = [
+                    // 创建打卡记录文件
+                    const initialContent = [
+                        '---',
+                        `title: ${task.title} - ${moment().format('YYYY-MM-DD')} 打卡记录`,
+                        'type: checkin-record',
+                        `date: ${moment().format('YYYY-MM-DD')}`,
+                        `today_start: ${todayRecord?.startTime ? moment(todayRecord.startTime).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `completed_at: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `daily_time_spent: ${this.formatTime(task.timeSpent || 0)}`,
+                        `time: ${moment().format('HH:mm:ss')}`,
+                        'tags:',
+                        '  - 打卡记录',
+                        '---',
                         '',
-                        `### ${moment().format('YYYY-MM-DD HH:mm:ss')} ${
-                            action === 'start' ? '开始' : 
-                            action === 'pause' ? '暂停' : '继续'
-                        }`,
-                        action === 'pause' ? `- 本次持续：${this.formatTime(Math.floor((elapsed || 0) / 1000))}` : '',
-                        action === 'pause' ? `- 累计用时：${this.formatTime(Math.floor(task.timeSpent || 0))}` : '',
+                        '## 时间记录',
+                        '',
+                        '## 打卡心得',
                         ''
-                    ].filter(line => line !== '').join('\n');
+                    ].join('\n');
+                    
+                    await this.app.vault.create(filePath, initialContent);
+                } else {
+                    // 创建普通任务笔记
+                    const initialContent = [
+                        '---',
+                        `title: ${task.title}`,
+                        'type: task',
+                        `created: ${moment().format('YYYY-MM-DD HH:mm:ss')}`,
+                        `planned_start: ${task.startDate ? moment(task.startDate).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `actual_start: ${task.actualStartTime ? moment(task.actualStartTime).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `today_start: ${todayRecord?.startTime ? moment(todayRecord.startTime).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `completed_at: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `daily_time_spent: ${todayRecord ? this.formatTime(todayRecord.dailyTimeSpent) : '00:00:00'}`,
+                        `total_time_spent: ${this.formatTime(task.totalTimeSpent || 0)}`,
+                        `due: ${task.dueDate ? moment(task.dueDate).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        'status: 进行中',
+                        'tags:',
+                        '  - 任务',
+                        ...(task.isUrgent ? ['  - 紧急'] : []),
+                        ...(task.isImportant ? ['  - 重要'] : []),
+                        '---',
+                        '',
+                        '## 任务描述',
+                        '',
+                        '## 时间记录',
+                        '',
+                        '## 任务笔记',
+                        ''
+                    ].join('\n');
+                    await this.app.vault.create(filePath, initialContent);
+                }
+            }
 
-                    // 查找完成情况记录部分并添加新记录
-                    const completionSectionRegex = /## 完成情况记录\n/;
-                    if (completionSectionRegex.test(content)) {
-                        content = content.replace(
-                            completionSectionRegex,
-                            `## 完成情况记录\n${timeRecord}`
-                        );
-                    } else {
-                        // 如果没有找到完成情况记录部分，添加到文件末尾
-                        content += '\n## 完成情况记录\n' + timeRecord;
-                    }
-
-                    // 重新组合内容，确保保留 frontmatter
-                    const updatedContent = frontmatter + content;
-                    await this.app.vault.modify(file, updatedContent);
+            const file = this.app.vault.getAbstractFileByPath(filePath);
+            if (file instanceof TFile) {
+                // 使用当前叶子或找到已存在的叶子
+                const leaf = this.app.workspace.getMostRecentLeaf();
+                if (leaf) {
+                    await leaf.openFile(file);
                 }
             }
         } catch (error) {
-            console.error('更新时间记录失败:', error);
-            new Notice('更新时间记录失败');
+            console.error('打开或创建笔记失败:', error);
+            new Notice('打开或创建笔记失败');
+        }
+    }
+
+    private async updateTaskTimeRecord(task: Task, action: 'start' | 'pause' | 'resume' | 'complete', elapsed?: number) {
+        if (task.type === 'checkin') {  // 打卡任务的处理
+            const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+            const filePath = `tasks/${fileName}/打卡记录/${moment().format('YYYY-MM-DD')}.md`;
+
+            try {
+                if (await this.app.vault.adapter.exists(filePath)) {
+                    const file = this.app.vault.getAbstractFileByPath(filePath);
+                    if (file instanceof TFile) {
+                        let content = await this.app.vault.read(file);
+                        
+                        // 获取今天的记录
+                        const todayRecord = task.timeRecords.find(r => r.date === moment().format('YYYY-MM-DD'));
+                        
+                        // 生成时间记录
+                        const timeRecord = [
+                            '',
+                            `开始时间：${moment(todayRecord?.startTime).format('HH:mm:ss')}`,
+                            '- 持续时间段：',
+                            ...(todayRecord?.pauseTimes || []).map((time, index) => 
+                                `  ${index + 1}. ${moment(time.start).format('HH:mm:ss')} - ${moment(time.end).format('HH:mm:ss')}`
+                            ),
+                            `- 当日用时：${this.formatTime(task.timeSpent || 0)}`,
+                            ''
+                        ].join('\n');
+
+                        // 查找或创建时间记录部分
+                        const timeRecordSectionRegex = /## 时间记录\n[\s\S]*?(?=\n## |$)/;
+                        if (timeRecordSectionRegex.test(content)) {
+                            content = content.replace(
+                                timeRecordSectionRegex,
+                                `## 时间记录\n${timeRecord}`
+                            );
+                        } else {
+                            content += '\n## 时间记录\n' + timeRecord;
+                        }
+
+                        await this.app.vault.modify(file, content);
+                    }
+                }
+            } catch (error) {
+                console.error('更新时间记录失败:', error);
+                new Notice('更新时间记录失败');
+            }
+        }
+        if (task.type !== 'checkin') {  // 非打卡任务的处理
+            const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+            const filePath = `tasks/${fileName}.md`;
+        
+            try {
+                if (await this.app.vault.adapter.exists(filePath)) {
+                    const file = this.app.vault.getAbstractFileByPath(filePath);
+                    if (file instanceof TFile) {
+                        let content = await this.app.vault.read(file);
+                        
+                        // 获取今天的记录
+                        const todayRecord = task.timeRecords.find(r => r.date === moment().format('YYYY-MM-DD'));
+                        
+                        // 生成时间记录
+                        const timeRecord = [
+                            '',
+                            `开始时间：${moment(todayRecord?.startTime).format('HH:mm:ss')}`,
+                            '- 持续时间段：',
+                            ...(todayRecord?.pauseTimes || []).map((time, index) => 
+                                `  ${index + 1}. ${moment(time.start).format('HH:mm:ss')} - ${moment(time.end).format('HH:mm:ss')}`
+                            ),
+                            `- 当日用时：${this.formatTime(task.timeSpent || 0)}`,
+                            `- 累计用时：${this.formatTime(task.totalTimeSpent || 0)}`,
+                            ''
+                        ].join('\n');
+        
+                        // 查找或创建时间记录部分
+                        const timeRecordSectionRegex = /## 时间记录\n[\s\S]*?(?=\n## |$)/;
+                        if (timeRecordSectionRegex.test(content)) {
+                            content = content.replace(
+                                timeRecordSectionRegex,
+                                `## 时间记录\n${timeRecord}`
+                            );
+                        } else {
+                            content += '\n## 时间记录\n' + timeRecord;
+                        }
+        
+                        await this.app.vault.modify(file, content);
+                    }
+                }
+            } catch (error) {
+                console.error('更新时间记录失败:', error);
+                new Notice('更新时间记录失败');
+            }
         }
     }
 
@@ -537,12 +914,46 @@ export class TaskBoardView extends ItemView {
 
         const statsSection = this.contentEl.createEl('div', { cls: 'task-board-stats-section' });
         
-        // 标题和按钮容器
-        const headerContainer = statsSection.createEl('div', { cls: 'stats-header' });
-        headerContainer.createEl('h3', { text: '任务完成记录' });
+        // 获取今日日期
+        const today = moment().format('YYYY-MM-DD');
+        
+        // 计算统计数据
+        const todayStats = {
+            totalTasks: this.data.tasks.length,
+            completedTasks: this.data.tasks.filter(task => task.completed).length,
+            totalTimeSpent: 0
+        };
+
+        // 计算今日总用时
+        this.data.tasks.forEach(task => {
+            const todayRecord = task.timeRecords?.find(r => r.date === today);
+            if (todayRecord) {
+                todayStats.totalTimeSpent += todayRecord.dailyTimeSpent || 0;
+            }
+        });
+
+        // 创建统计显示
+        const statsContainer = statsSection.createEl('div', { cls: 'stats-container' });
+        
+        // 任务统计
+        statsContainer.createEl('div', { 
+            cls: 'stats-item',
+            text: `待完成：${todayStats.totalTasks - todayStats.completedTasks}`
+        });
+        
+        statsContainer.createEl('div', { 
+            cls: 'stats-item',
+            text: `已完成：${todayStats.completedTasks}`
+        });
+        
+        // 今日用时
+        statsContainer.createEl('div', { 
+            cls: 'stats-item',
+            text: `今日用时：${this.formatTime(todayStats.totalTimeSpent)}`
+        });
 
         // 添加按钮容器
-        const buttonsContainer = headerContainer.createEl('div', { cls: 'stats-header-buttons' });
+        const buttonsContainer = statsSection.createEl('div', { cls: 'stats-buttons' });
 
         // 添加今日总结按钮
         const summaryButton = buttonsContainer.createEl('button', {
@@ -557,55 +968,6 @@ export class TaskBoardView extends ItemView {
             cls: 'clear-records-btn'
         });
         clearButton.addEventListener('click', () => this.clearAllCompletions());
-
-        if (this.completions.length === 0) {
-            statsSection.createEl('div', { 
-                text: '暂无完成记录',
-                cls: 'no-tasks'
-            });
-            return;
-        }
-
-        // 创建记录列表
-        const recordList = statsSection.createEl('div', { cls: 'task-record-list' });
-        
-        this.completions.forEach(completion => {
-            const recordItem = recordList.createEl('div', { cls: 'task-record-item' });
-            
-            // 记录内容容器
-            const contentContainer = recordItem.createEl('div', { cls: 'record-content' });
-            
-            // 找到对应的任务以获取更多信息
-            const task = this.data.tasks.find(t => t.title === completion.taskName);
-            
-            contentContainer.createEl('div', { 
-                text: `📝 ${completion.taskName} ${task?.isUrgent ? '[紧急]' : ''} ${task?.isImportant ? '[重要]' : ''}`,
-                cls: 'task-record-title'
-            });
-            contentContainer.createEl('div', { 
-                text: `⏰ 开始时间：${this.formatDate(completion.startedAt)}`,
-                cls: 'task-record-time'
-            });
-            contentContainer.createEl('div', { 
-                text: `⏰ 完成时间：${this.formatDate(completion.completedAt)}`,
-                cls: 'task-record-time'
-            });
-            contentContainer.createEl('div', { 
-                text: `⌛ 实际用时：${this.formatTime(completion.timeSpent)}`,
-                cls: 'task-record-time'
-            });
-            contentContainer.createEl('div', { 
-                text: `💭 完成心得：${completion.reflection}`,
-                cls: 'task-record-reflection'
-            });
-
-            // 添加删除按钮
-            const deleteBtn = recordItem.createEl('button', {
-                text: '删除',
-                cls: 'task-record-delete'
-            });
-            deleteBtn.addEventListener('click', () => this.deleteCompletion(completion));
-        });
     }
 
     private async deleteCompletion(completion: TaskCompletion) {
@@ -715,7 +1077,9 @@ export class TaskBoardView extends ItemView {
             completed: false,
             timeSpent: 0,
             isTimerRunning: false,
-            priority: TaskPriority.NONE
+            priority: TaskPriority.NONE,
+            timeRecords: [],      // 添加这行
+            totalTimeSpent: 0     // 添加这行
         };
         
         const modal = new TaskModal(this.app, emptyTask, async (result) => {
@@ -737,7 +1101,9 @@ export class TaskBoardView extends ItemView {
                     timeSpent: 0,
                     isTimerRunning: false,
                     startedAt: undefined,
-                    priority: result.priority || TaskPriority.NONE
+                    priority: result.priority || TaskPriority.NONE,
+                    timeRecords: [],          // 添加这行
+                    totalTimeSpent: 0         // 添加这行
                 });
                 await this.saveData();
                 const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
@@ -754,7 +1120,7 @@ export class TaskBoardView extends ItemView {
         const task = this.data.tasks.find(t => t.id === taskId);
         if (!task) return;
 
-        // 如果是打卡任务，检查今天是否已经打卡
+        // 如果是打卡任务
         if (task.type === 'checkin') {
             const today = moment().format('YYYY-MM-DD');
             const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
@@ -763,25 +1129,176 @@ export class TaskBoardView extends ItemView {
             // 检查今天的打卡文件是否已存在
             const fileExists = await this.app.vault.adapter.exists(checkinPath);
             
-            if (fileExists && !task.completed) {
-                // 如果文件已存在且任务未完成，打开已存在的文件
-                const existingFile = this.app.vault.getAbstractFileByPath(checkinPath);
-                if (existingFile instanceof TFile) {
-                    await this.app.workspace.getLeaf().openFile(existingFile);
+            if (task.completed) {
+                // 弹出确认对话框
+                const confirmResult = await new Promise<string>(resolve => {
+                    const modal = new Modal(this.app);
+                    modal.titleEl.setText('重新打卡确认');
+                    modal.contentEl.createEl('p', { text: '是否重新打卡？' });
+                    modal.contentEl.createEl('p', { text: '选择"删除"将清除今天的打卡记录重新开始，选择"继续"将保留开始时间，仅更新完成时间。' });
+                    
+                    const buttonContainer = modal.contentEl.createDiv({ cls: 'button-container' });
+                    
+                    const deleteButton = buttonContainer.createEl('button', { text: '删除' });
+                    deleteButton.addEventListener('click', () => {
+                        modal.close();
+                        resolve('delete');
+                    });
+                    
+                    const continueButton = buttonContainer.createEl('button', { text: '继续' });
+                    continueButton.addEventListener('click', () => {
+                        modal.close();
+                        resolve('continue');
+                    });
+                    
+                    const cancelButton = buttonContainer.createEl('button', { text: '取消' });
+                    cancelButton.addEventListener('click', () => {
+                        modal.close();
+                        resolve('cancel');
+                    });
+                    
+                    modal.open();
+                });
+
+                if (confirmResult === 'delete') {
+                    // 取消复选框
+                    task.completed = false;
+                    delete task.completedAt;
+                    if (task.isTimerRunning) {
+                        task.isTimerRunning = false;
+                        delete task.timerStartTime;
+                    }
+                    task.timeSpent = 0; // 重置用时
+                    
+                    // 删除今天的打卡记录
+                    if (fileExists) {
+                        const file = this.app.vault.getAbstractFileByPath(checkinPath);
+                        if (file instanceof TFile) {
+                            await this.app.vault.delete(file);
+                        }
+                    }
+                } else if (confirmResult === 'continue') {
+                    // 取消复选框
+                    task.completed = false;
+                } else if (confirmResult === 'cancel') {
+                    // 保持复选框选中状态
                     return;
                 }
-            }
-        }
-
-        // 显示打卡对话框或完成任务
-        if (task.type === 'checkin' && !task.completed) {
-            new CheckinModal(this.app, async (content) => {
-                if (content !== null) {
-                    await this.completeCheckinTask(task, content);
+            } else {
+                // 设置完成时间
+                task.completedAt = Date.now();
+        
+                // 新建打卡记录或更新现有记录
+                if (fileExists) {
+                    // 更新现有记录
+                    const file = this.app.vault.getAbstractFileByPath(checkinPath) as TFile;
+                    const content = await this.app.vault.read(file);
+                    await this.updateCheckinNoteFrontmatter(task, checkinPath);
+                } else {
+                    // 新建打卡记录
+                    await this.completeCheckinTask(task, '');
                 }
-            }).open();
+                task.completed = true;  // 保持复选框选中状态
+            }
+            
+            await this.saveData();
+            const taskList = this.contentEl.querySelector('.task-list');
+            if (taskList instanceof HTMLElement) {
+                this.renderTasks(taskList);
+            }
+            this.createStatsSection();
         } else {
-            await this.completeTask(task);
+            // 非打卡任务
+            task.completed = !task.completed;
+            const now = Date.now();
+            
+            if (task.completed) {
+                task.completedBy = this.data.currentUserId;
+                task.completedAt = now;
+                
+                // 重置计时器状态
+                if (task.isTimerRunning) {
+                    task.isTimerRunning = false;
+                    const elapsed = now - (task.timerStartTime || 0);
+                    task.timeSpent = (task.timeSpent || 0) + Math.floor(elapsed / 1000);
+                    delete task.timerStartTime;
+                }
+
+                // 更新笔记并打开
+                const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+                const filePath = `tasks/${fileName}.md`;
+                
+                // 更新笔记 frontmatter 和时间记录
+                await this.updateNoteFrontmatter(task);
+                await this.updateTaskTimeRecord(task, 'complete');
+                
+                // 打开笔记
+                const file = this.app.vault.getAbstractFileByPath(filePath);
+                if (file instanceof TFile) {
+                    await this.app.workspace.getLeaf().openFile(file);
+                }
+
+                // 添加到完成记录
+                this.completions.push({
+                    taskName: task.title,
+                    reflection: '',
+                    timestamp: now,
+                    startedAt: task.startedAt,
+                    completedAt: now,
+                    timeSpent: task.timeSpent || 0
+                });
+            } else {
+                // 取消完成状态
+                delete task.completedAt;
+                await this.updateNoteFrontmatter(task);
+            }
+
+            // 保存数据
+            this.data.completions = this.completions;
+            await this.saveData();
+
+            // 更新界面
+            const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
+            this.renderTasks(taskList);
+            this.createStatsSection();
+        }
+    }
+
+    private async updateCheckinNoteFrontmatter(task: Task, filePath: string) {
+        try {
+            if (await this.app.vault.adapter.exists(filePath)) {
+                const file = this.app.vault.getAbstractFileByPath(filePath);
+                if (file instanceof TFile) {
+                    const content = await this.app.vault.read(file);
+                    
+                    // 获取今日记录
+                    const today = moment().format('YYYY-MM-DD');
+                    const todayRecord = task.timeRecords.find(r => r.date === today);
+                    const now = moment().format('HH:mm:ss');
+                    
+                    // 更新打卡记录的 frontmatter
+                    const newFrontmatter = [
+                        '---',
+                        `title: ${task.title} - ${today} 打卡记录`,
+                        'type: checkin-record',
+                        `date: ${today}`,
+                        `today_start: ${todayRecord?.startTime ? moment(todayRecord.startTime).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `completed_at: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `daily_time_spent: ${this.formatTime(todayRecord?.dailyTimeSpent || 0)}`,
+                        `time: ${now}`,
+                        'tags:',
+                        '  - 打卡记录',
+                        '---'
+                    ].join('\n');
+
+                    // 替换原有的 frontmatter
+                    const newContent = content.replace(/---[\s\S]*?---/, newFrontmatter);
+                    await this.app.vault.modify(file, newContent);
+                }
+            }
+        } catch (error) {
+            console.error('更新打卡记录 frontmatter 失败:', error);
+            new Notice('更新打卡记录 frontmatter 失败');
         }
     }
 
@@ -792,13 +1309,23 @@ export class TaskBoardView extends ItemView {
         const checkinPath = `tasks/${fileName}/打卡记录/${today}.md`;
         
         try {
-            // 创建打卡笔记
+            // 获取实际开始时间，使用本地时间格式
+            const actualStartTime = task.timerStartTime 
+                ? moment(task.timerStartTime).local().format('YYYY-MM-DD HH:mm:ss')
+                : moment().local().format('YYYY-MM-DD HH:mm:ss');
+            const completedTime = moment().local().format('YYYY-MM-DD HH:mm:ss');
+            
             const checkinContent = [
                 '---',
+                `title: ${task.title}`,
                 `date: ${today}`,
                 `time: ${currentTime}`,
                 `task: ${task.title}`,
                 'type: checkin',
+                'status: 已完成',
+                `actual_start: ${actualStartTime}`,
+                `completed_at: ${completedTime}`,
+                `time_spent: ${this.formatTime(task.timeSpent)}`,
                 'tags:',
                 '  - 打卡',
                 `  - ${task.category || '其他'}`,
@@ -807,7 +1334,8 @@ export class TaskBoardView extends ItemView {
                 `# ${task.title} - ${today} 打卡记录`,
                 '',
                 '## 完成情况',
-                `- 完成时间：${moment().format('YYYY-MM-DD HH:mm:ss')}`,
+                `- 实际开始时间：${actualStartTime}`,  // 更新为实际开始时间
+                `- 完成时间：${completedTime}`,
                 `- 用时：${this.formatTime(task.timeSpent)}`,
                 '',
                 '## 今日心得',
@@ -823,25 +1351,12 @@ export class TaskBoardView extends ItemView {
                 await this.app.vault.createFolder(recordPath);
             }
 
-            // 创建并打开打卡笔记
-            let file: TFile;
-            if (await this.app.vault.adapter.exists(checkinPath)) {
-                file = this.app.vault.getAbstractFileByPath(checkinPath) as TFile;
-                await this.app.vault.modify(file, checkinContent);
-            } else {
-                file = await this.app.vault.create(checkinPath, checkinContent);
-            }
+            await this.app.vault.create(checkinPath, checkinContent);
+            
+            // 打开笔记
+            const file = this.app.vault.getAbstractFileByPath(checkinPath) as TFile;
             await this.app.workspace.getLeaf().openFile(file);
 
-            // 完成任务
-            await this.completeTask(task);
-            
-            // 重置任务完成状态（为明天准备）
-            setTimeout(() => {
-                task.completed = false;
-                delete task.completedAt;
-                this.saveData();
-            }, 0);
         } catch (error) {
             console.error('创建打卡笔记失败:', error);
             new Notice('创建打卡笔记失败');
@@ -850,14 +1365,43 @@ export class TaskBoardView extends ItemView {
 
     private async resetTimer(taskId: string) {
         const task = this.data.tasks.find(t => t.id === taskId);
-        if (task) {
-            task.timeSpent = 0;
+        if (!task) return;
+    
+        // 停止计时器（如果正在运行）
+        if (task.isTimerRunning) {
             task.isTimerRunning = false;
-            delete task.timerStartTime;
-            await this.saveData();
-            const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
-            this.renderTasks(taskList);
+            if (this.data.timers[taskId]) {
+                clearInterval(this.data.timers[taskId]);
+                delete this.data.timers[taskId];
+            }
         }
+    
+        // 重置所有时间相关属性
+        task.timeSpent = 0;
+        task.totalTimeSpent = 0;
+        task.timeRecords = [];  // 清空所有时间记录
+        delete task.timerStartTime;
+        delete task.actualStartTime;
+    
+        // 更新笔记的 frontmatter
+        await this.updateNoteFrontmatter(task);
+        
+        // 更新界面显示
+        const taskEl = this.contentEl.querySelector(`[data-task-id="${taskId}"]`);
+        if (taskEl) {
+            const timeDisplay = taskEl.querySelector('.time-display');
+            if (timeDisplay) {
+                timeDisplay.textContent = this.formatTime(0);
+            }
+            const timerBtn = taskEl.querySelector('.timer-btn');
+            if (timerBtn) {
+                timerBtn.textContent = '开始';
+                timerBtn.classList.remove('running');
+            }
+        }
+    
+        await this.saveData();
+        new Notice('已重置任务时间');
     }
 
     private async deleteTask(taskId: string) {
@@ -878,145 +1422,137 @@ export class TaskBoardView extends ItemView {
         return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
     }
 
-    // 处理任务完成
-    private async handleTaskCompletion(taskName: string) {
-        new ReflectionModal(this.app, async (reflection) => {
-            this.completions.push({
-                taskName,
-                reflection,
-                timestamp: Date.now(),
-                startedAt: undefined,
-                completedAt: Date.now(),
-                timeSpent: 0
-            });
-            new Notice("已记录完成心得！");
-        }).open();
-    }
+    
 
     // 创建今日总结
     private async createDailySummary() {
-        if (this.completions.length === 0) {
-            new Notice("今天还没有完成任何任务！");
-            return;
+        // 生成带图表的总结内容
+        const content = this.generateSummaryContent();
+        
+        // 获取今天的日期
+        const today = moment().format('YYYY-MM-DD');
+        const dailyNotePath = `daily/${today}.md`;
+        
+        // 检查今日日记是否存在
+        let dailyNote: TFile;
+        if (await this.app.vault.adapter.exists(dailyNotePath)) {
+            dailyNote = this.app.vault.getAbstractFileByPath(dailyNotePath) as TFile;
+            // 在日记末尾添加总结内容
+            const originalContent = await this.app.vault.read(dailyNote);
+            await this.app.vault.modify(dailyNote, originalContent + '\n\n' + content);
+        } else {
+            // 如果不存在，创建新的日记文件
+            dailyNote = await this.app.vault.create(dailyNotePath, content);
         }
-
-        try {
-            // 生成日期字符串
-            const dateStr = moment().format('YYYY-MM-DD');
-            const summaryContent = this.generateSummaryContent();
-
-            // 确保日记文件夹存在
-            const dailyNotesFolder = 'daily';
-            if (!(await this.app.vault.adapter.exists(dailyNotesFolder))) {
-                await this.app.vault.createFolder(dailyNotesFolder);
-            }
-
-            // 获取或创建今天的日记文件
-            const dailyNotePath = `${dailyNotesFolder}/${dateStr}.md`;
-            let existingContent = '';
-            
-            if (await this.app.vault.adapter.exists(dailyNotePath)) {
-                const file = this.app.vault.getAbstractFileByPath(dailyNotePath);
-                if (file instanceof TFile) {
-                    existingContent = await this.app.vault.read(file);
-                }
-            }
-
-            // 如果文件不存在，创建基本结构
-            if (!existingContent) {
-                existingContent = [
-                    '---',
-                    `date: ${dateStr}`,
-                    'type: daily',
-                    'tags:',
-                    '  - 日记',
-                    '---',
-                    '',
-                    `# ${dateStr} 日记`,
-                    '',
-                    '## 今日记录',
-                    '',
-                ].join('\n');
-            }
-
-            // 添加任务总结
-            const updatedContent = existingContent + '\n' + summaryContent;
-
-            // 写入或更新文件
-            if (await this.app.vault.adapter.exists(dailyNotePath)) {
-                const file = this.app.vault.getAbstractFileByPath(dailyNotePath);
-                if (file instanceof TFile) {
-                    await this.app.vault.modify(file, updatedContent);
-                }
-            } else {
-                await this.app.vault.create(dailyNotePath, updatedContent);
-            }
-
-            new Notice('今日总结已添加到日记！');
-
-            // 清空完成记录
-            this.completions = [];
-            this.data.completions = [];
-            await this.saveData();
-            this.createStatsSection();
-
-        } catch (error) {
-            console.error('Failed to create daily summary:', error);
-            new Notice('创建今日总结失败！请检查日记文件夹权限。');
-        }
+        
+        // 打开日记文件
+        await this.app.workspace.getLeaf().openFile(dailyNote);
     }
 
     private generateSummaryContent(): string {
         const now = moment();
-        let content = [
-            '## 今日任务总结',
-            `> 更新时间：${now.format('HH:mm:ss')}`,
-            '',
-            '### 已完成任务',
-            ''
-        ].join('\n');
-
-        // 按任务类型分组
-        const tasksByCategory: { [key: string]: TaskCompletion[] } = {};
-        this.completions.forEach(completion => {
-            const task = this.data.tasks.find(t => t.title === completion.taskName);
-            const category = task?.category || '其他';
-            if (!tasksByCategory[category]) {
-                tasksByCategory[category] = [];
-            }
-            tasksByCategory[category].push(completion);
-        });
-
-        // 按分类输出任务
-        Object.entries(tasksByCategory).forEach(([category, completions]: [string, TaskCompletion[]]) => {
-            content += `#### ${category}\n`;
-            completions.forEach(({ taskName, reflection, startedAt, completedAt, timeSpent }) => {
-                const task = this.data.tasks.find(t => t.title === taskName);
-                const tags = [];
-                if (task?.isUrgent) tags.push('紧急');
-                if (task?.isImportant) tags.push('重要');
-                
-                content += `##### ${taskName} ${tags.length ? `[${tags.join('/')}]` : ''}\n`;
-                content += `- 开始时间：${startedAt ? moment(startedAt).format('HH:mm:ss') : '未记录'}\n`;
-                content += `- 完成时间：${moment(completedAt).format('HH:mm:ss')}\n`;
-                content += `- 用时：${this.formatTime(timeSpent)}\n`;
-                if (reflection) {
-                    content += `- 心得：${reflection}\n`;
-                }
-                content += '\n';
-            });
-        });
-
-        // 添加统计信息
-        const totalTasks = this.completions.length;
-        const totalTime = this.completions.reduce((sum, c) => sum + (c.timeSpent || 0), 0);
+        const today = now.format('YYYY-MM-DD');
         
-        content += [
-            '### 今日统计',
-            `- 完成任务数：${totalTasks}`,
-            `- 总计用时：${this.formatTime(totalTime)}`,
-            `- 平均用时：${this.formatTime(Math.floor(totalTime / totalTasks))}`,
-            ''
+        const frontmatter = {
+            title: `${today} 任务总结`,
+            date: today,
+            type: 'daily',
+            tags: ['任务', '日记']
+        };
+        
+        let content = [
+            '---',
+            yaml.dump(frontmatter),
+            '---',
+            '',
+            '## 📊 今日任务仪表盘',
+            `> 更新时间：${now.format('YYYY-MM-DD HH:mm:ss')}`,
+            '',
+            '### 📅 今日计划',
+            '```dataview',
+            'TABLE WITHOUT ID',
+            '  title as "任务",',
+            '  type as "类型",',
+            '  planned_start as "计划开始",',
+            '  due as "计划截止"',
+            'FROM "tasks"',
+            `WHERE planned_start = "${today}" OR due = "${today}"`,
+            'SORT file.ctime ASC',
+            '```',
+            '',
+            '### ⏱️ 今日进行中',
+            '```dataview',
+            'TABLE WITHOUT ID',
+            '  title as "任务",',
+            '  today_start as "开始时间",',
+            '  daily_time_spent as "今日用时",',
+            '  total_time_spent as "累计用时"',
+            'FROM "tasks"',
+            `WHERE today_start = "${today}" AND status != "已完成"`,
+            'SORT today_start DESC',
+            '```',
+            '',
+            '### ✅ 今日完成',
+            '```dataview',
+            'TABLE WITHOUT ID',
+            '  title as "任务",',
+            '  today_start as "开始时间",',
+            '  completed_at as "完成时间",',
+            '  daily_time_spent as "用时",',
+            '  total_time_spent as "累计用时"',
+            'FROM "tasks"',
+            `WHERE completed_at = "${today}"`,
+            'SORT completed_at DESC',
+            '```',
+            '',
+            '### 📊 统计概览',
+            '```dataviewjs',
+            'const tasks = dv.pages(\'#任务\')',
+            `  .where(p => p.today_start == "${today}" || p.completed_at == "${today}");`,
+            '',
+            'const planned = dv.pages(\'#任务\')',
+            `  .where(p => p.planned_start == "${today}" || p.due == "${today}");`,
+            '',
+            'const completed = tasks.where(p => p.completed_at == "${today}");',
+            '',
+            'dv.header(4, "🎯 任务情况");',
+            'dv.paragraph(`- 计划任务：${planned.length} 个`);',
+            'dv.paragraph(`- 进行中：${tasks.length - completed.length} 个`);',
+            'dv.paragraph(`- 已完成：${completed.length} 个`);',
+            '',
+            'const totalTime = tasks',
+            '  .array()',
+            '  .reduce((sum, task) => sum + (task.daily_time_spent || 0), 0);',
+            'dv.paragraph(`- 今日总用时：${totalTime} 分钟`);',
+            '```',
+            '',
+            '### 📈 分类统计',
+            '```dataviewjs',
+            'const allTasks = dv.pages(\'#任务\')',
+            `  .where(p => p.today_start == "${today}" || p.completed_at == "${today}");`,
+            '',
+            'const categories = {};',
+            'allTasks.array().forEach(task => {',
+            '  const category = task.category || "未分类";',
+            '  if (!categories[category]) {',
+            '    categories[category] = {',
+            '      total: 0,',
+            '      completed: 0,',
+            '      timeSpent: 0',
+            '    };',
+            '  }',
+            '  categories[category].total++;',
+            '  if (task.completed_at) categories[category].completed++;',
+            '  categories[category].timeSpent += task.daily_time_spent || 0;',
+            '});',
+            '',
+            'for (const [category, stats] of Object.entries(categories)) {',
+            '  dv.header(4, category);',
+            '  dv.paragraph(`- 总数：${stats.total}`);',
+            '  dv.paragraph(`- 已完成：${stats.completed}`);',
+            '  dv.paragraph(`- 用时：${stats.timeSpent} 分钟`);',
+            '}',
+            '```'
         ].join('\n');
 
         return content;
@@ -1024,21 +1560,80 @@ export class TaskBoardView extends ItemView {
 
     // 添加清空所有完成记录的方法
     private async clearAllCompletions() {
-        if (this.completions.length > 0) {
-            const confirmed = confirm('确定要清空所有完成记录吗？此操作不可撤销。');
-            if (confirmed) {
-                this.completions = [];
-                // 更新 TaskBoardData 中的 completions
-                this.data.completions = [];
-                await this.saveData();
-                this.createStatsSection();
-                new Notice('已清空所有完成记录');
+        // 弹出确认对话框
+        const confirmResult = await new Promise<boolean>(resolve => {
+            const modal = new Modal(this.app);
+            modal.titleEl.setText('确认清空');
+            modal.contentEl.createEl('p', { text: '确定要清空所有已完成任务和今日用时记录吗？' });
+            
+            const buttonContainer = modal.contentEl.createDiv({ cls: 'button-container' });
+            
+            const confirmButton = buttonContainer.createEl('button', { text: '确定' });
+            confirmButton.addEventListener('click', () => {
+                modal.close();
+                resolve(true);
+            });
+            
+            const cancelButton = buttonContainer.createEl('button', { text: '取消' });
+            cancelButton.addEventListener('click', () => {
+                modal.close();
+                resolve(false);
+            });
+            
+            modal.open();
+        });
+    
+        if (!confirmResult) return;
+    
+        const today = moment().format('YYYY-MM-DD');
+    
+        // 重置所有任务的完成状态和今日用时
+        this.data.tasks.forEach(task => {
+            // 重置完成状态
+            if (task.completed) {
+                task.completed = false;
+                delete task.completedAt;
             }
-        } else {
-            new Notice('没有可清空的记录');
+    
+            // 重置今日用时
+            const todayRecord = task.timeRecords?.find(r => r.date === today);
+            if (todayRecord) {
+                todayRecord.dailyTimeSpent = 0;
+                todayRecord.pauseTimes = [];
+            }
+            if (task.timeSpent) {
+                task.timeSpent = 0;
+            }
+    
+            // 停止正在运行的计时器
+            if (task.isTimerRunning) {
+                task.isTimerRunning = false;
+                if (this.data.timers[task.id]) {
+                    clearInterval(this.data.timers[task.id]);
+                    delete this.data.timers[task.id];
+                }
+                delete task.timerStartTime;
+            }
+    
+            // 更新笔记的 frontmatter
+            this.updateNoteFrontmatter(task);
+        });
+    
+        // 清空完成记录
+        this.completions = [];
+        this.data.completions = [];
+    
+        await this.saveData();
+        
+        // 重新渲染任务列表和统计区域
+        const taskList = this.contentEl.querySelector('.task-list');
+        if (taskList instanceof HTMLElement) {
+            this.renderTasks(taskList);
         }
+        this.createStatsSection();
+    
+        new Notice('已清空所有完成记录和今日用时');
     }
-
     private async openOrCreateNote(taskTitle: string) {
         const task = this.data.tasks.find(t => t.title === taskTitle);
         if (!task) return;
@@ -1134,6 +1729,8 @@ export class TaskBoardView extends ItemView {
     private async updateNoteFrontmatter(task: Task) {
         const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
         const filePath = `tasks/${fileName}.md`;
+        const today = moment().format('YYYY-MM-DD');
+        const todayRecord = task.timeRecords.find(r => r.date === today);
 
         try {
             if (await this.app.vault.adapter.exists(filePath)) {
@@ -1143,15 +1740,17 @@ export class TaskBoardView extends ItemView {
                     
                     // 更新 frontmatter
                     const newFrontmatter = [
-                        '---',
-                        `alias: ${task.title}`,
+                        '---',                
+                        `title: ${task.title}`,
                         `status: ${task.completed ? '已完成' : '进行中'}`,
                         `created: ${moment(file.stat.ctime).format('YYYY-MM-DD')}`,
                         `planned_start: ${task.startDate ? moment(task.startDate).format('YYYY-MM-DD HH:mm:ss') : ''}`,
-                        `actual_start: ${task.startedAt ? moment(task.startedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `actual_start: ${task.actualStartTime ? moment(task.actualStartTime).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `today_start: ${todayRecord?.startTime ? moment(todayRecord.startTime).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `completed_at: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `daily_time_spent: ${todayRecord ? this.formatTime(todayRecord.dailyTimeSpent) : '00:00:00'}`,
+                        `total_time_spent: ${this.formatTime(task.totalTimeSpent)}`,
                         `due: ${task.dueDate ? moment(task.dueDate).format('YYYY-MM-DD HH:mm:ss') : ''}`,
-                        `progress: ${task.timeSpent > 0 ? Math.floor((task.timeSpent / 3600) * 100) : ''}`,
-                        `done: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
                         'tags:',
                         '  - 任务',
                         ...(task.isUrgent ? ['  - 紧急'] : []),
@@ -1159,8 +1758,42 @@ export class TaskBoardView extends ItemView {
                         '---'
                     ].join('\n');
 
-                    // 替换原有的 frontmatter
-                    const newContent = content.replace(/---[\s\S]*?---/, newFrontmatter);
+                    // 生成时间记录内容
+                    const timeRecordContent = [
+                        '## 时间记录',
+                        `- 任务开始时间：${task.actualStartTime ? moment(task.actualStartTime).format('YYYY-MM-DD HH:mm:ss') : '未开始'}`,
+                        '',
+                        '### 每日记录',
+                        ...task.timeRecords.map(record => [
+                            `#### ${record.date}`,
+                            `- 开始时间：${moment(record.startTime).format('HH:mm:ss')}`,
+                            '- 持续时间段：',
+                            ...record.pauseTimes.map((period, index) => 
+                                `  ${index + 1}. ${moment(period.start).format('HH:mm:ss')} - ${moment(period.end).format('HH:mm:ss')}`
+                            ),
+                            `- 当日用时：${this.formatTime(record.dailyTimeSpent)}`,
+                            ''
+                        ].join('\n')),
+                        `- 累计用时：${this.formatTime(task.totalTimeSpent)}`,
+                        ''
+                    ].join('\n');
+
+                    // 替换或添加时间记录部分
+                    let newContent = content.replace(/---[\s\S]*?---/, newFrontmatter);
+                    const timeRecordRegex = /## 时间记录[\s\S]*?(?=\n## |$)/;
+                    if (timeRecordRegex.test(newContent)) {
+                        newContent = newContent.replace(timeRecordRegex, timeRecordContent);
+                    } else {
+                        // 在任务描述后添加时间记录
+                        const taskDescriptionRegex = /## 任务描述\n/;
+                        if (taskDescriptionRegex.test(newContent)) {
+                            newContent = newContent.replace(
+                                taskDescriptionRegex,
+                                `## 任务描述\n\n${timeRecordContent}`
+                            );
+                        }
+                    }
+
                     await this.app.vault.modify(file, newContent);
                 }
             }
@@ -1327,27 +1960,7 @@ export class TaskBoardView extends ItemView {
         // ... 现有代码 ...
     }
 
-    private sortTasks(tasks: Task[]): Task[] {
-        const priorityOrder = {
-            [TaskPriority.HIGH]: 0,    // 高优先级排在最前
-            [TaskPriority.MEDIUM]: 1,
-            [TaskPriority.LOW]: 2,
-            [TaskPriority.NONE]: 3
-        };
-
-        return tasks.sort((a, b) => {
-            // 首先按优先级排序（高优先级在前）
-            const priorityDiff = (priorityOrder[a.priority || TaskPriority.NONE] || 3) 
-                - (priorityOrder[b.priority || TaskPriority.NONE] || 3);
-            if (priorityDiff !== 0) return priorityDiff;
-
-            // 其次按创建时间倒序（新任务在前）
-            const aId = parseInt(a.id || '0');
-            const bId = parseInt(b.id || '0');
-            return bId - aId;  // 新创建的任务 id 更大，所以倒序排列
-        });
-    }
-
+    
     private async editTask(taskId: string) {
         const task = this.data.tasks.find(t => t.id === taskId);
         if (!task) return;
@@ -1417,7 +2030,7 @@ export class TaskBoardView extends ItemView {
             // 更新 frontmatter
             const frontmatter = [
                 '---',
-                `alias: ${task.title}`,
+                `title: ${task.title}`,
                 `status: ${task.completed ? '已完成' : '进行中'}`,
                 `created: ${moment(file.stat.ctime).format('YYYY-MM-DD')}`,
                 `planned_start: ${formatDateTime(task.startDate)}`,
@@ -1461,39 +2074,37 @@ export class TaskBoardView extends ItemView {
 
     private async completeTask(task: Task) {
         if (!task.completed) {
-            // 打开反思对话框
-            new ReflectionModal(this.app, async (reflection) => {
-                task.completed = true;
-                task.completedBy = this.data.currentUserId;
-                task.completedAt = Date.now();
-                // 重置计时器状态
-                task.isTimerRunning = false;
-                delete task.timerStartTime;
-
-                // 添加到完成记录
-                this.completions.push({
-                    taskName: task.title,
-                    reflection: reflection,
-                    timestamp: Date.now(),
-                    startedAt: task.startedAt,
-                    completedAt: task.completedAt,
-                    timeSpent: task.timeSpent || 0
-                });
-
-                // 更新笔记
-                await this.updateTaskNoteOnCompletion(task, reflection);
-
-                // 保存数据
-                this.data.completions = this.completions;
-                await this.saveData();
-
-                // 更新界面
-                const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
-                this.renderTasks(taskList);
-                this.createStatsSection();
-                
-                new Notice("任务完成！");
-            }).open();
+            task.completed = true;
+            task.completedBy = this.data.currentUserId;
+            task.completedAt = Date.now();
+            // 重置计时器状态
+            task.isTimerRunning = false;
+            delete task.timerStartTime;
+            
+            // 添加到完成记录
+            this.completions.push({
+                taskName: task.title,
+                reflection: '',  // 不再需要心得
+                timestamp: Date.now(),
+                startedAt: task.startedAt,
+                completedAt: task.completedAt,
+                timeSpent: task.timeSpent || 0
+            });
+            
+            // 更新笔记
+            await this.updateTaskNoteOnCompletion(task, '');  // 传入空字符串作为心得
+            
+            // 保存数据
+            this.data.completions = this.completions;
+            await this.saveData();
+            
+            // 更新界面
+            const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
+            this.renderTasks(taskList);
+            this.createStatsSection();
+            
+            new Notice("任务完成！");
+            
         } else {
             task.completed = false;
             delete task.completedAt;
@@ -1553,6 +2164,8 @@ export class TaskBoardView extends ItemView {
             new Notice('添加完成记录到笔记失败');
         }
     }
+
+
 }
 
 class TaskModal extends Modal {
@@ -1933,6 +2546,160 @@ class EditTaskModal extends Modal {
             });
             this.close();
         });
+    }
+}
+
+class TaskImportModal extends Modal {
+    private tasks: Task[] = [];
+    private selectedTasks: Set<string> = new Set();
+
+    constructor(
+        app: App,
+        private parsedTasks: Task[],
+        private onConfirm: (tasks: Task[]) => void
+    ) {
+        super(app);
+        this.tasks = parsedTasks;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        
+        contentEl.createEl('h2', { text: '导入任务预览' });
+        
+        // 添加全选区域
+        const selectAllContainer = contentEl.createEl('div', { cls: 'task-import-select-all' });
+        const selectAllCheckbox = selectAllContainer.createEl('input', {
+            type: 'checkbox',
+            cls: 'task-import-checkbox'
+        });
+        selectAllContainer.createEl('span', { text: '全选/取消全选' });
+        
+        // 创建任务列表
+        const taskList = contentEl.createEl('div', { cls: 'task-import-list' });
+        
+        const checkboxes: HTMLInputElement[] = [];
+        
+        this.tasks.forEach(task => {
+            const taskItem = taskList.createEl('div', { cls: 'task-import-item' });
+            
+            // 左侧：复选框和任务标题
+            const leftSection = taskItem.createEl('div', { cls: 'task-import-item-left' });
+            
+            const checkbox = leftSection.createEl('input', {
+                type: 'checkbox',
+                cls: 'task-import-checkbox',
+                attr: { id: task.id }
+            });
+            checkboxes.push(checkbox);
+            
+            const titleSpan = leftSection.createEl('span', { 
+                text: task.title,
+                cls: 'task-import-title'
+            });
+            
+            // 右侧：任务属性
+            const rightSection = taskItem.createEl('div', { cls: 'task-import-item-right' });
+            // 日期
+            if (task.startDate || task.dueDate) {
+                const dateContainer = rightSection.createEl('div', { cls: 'task-import-dates' });
+                
+                if (task.startDate) {
+                    dateContainer.createEl('span', {
+                        text: `🛫${task.startDate}`,
+                        cls: 'task-date start-date'
+                    });
+                }
+                
+                if (task.dueDate) {
+                    dateContainer.createEl('span', {
+                        text: `📅${task.dueDate}`,
+                        cls: 'task-date due-date'
+                    });
+                }
+            }
+            
+            // 优先级标签
+            if (task.priority && task.priority !== TaskPriority.NONE) {
+                const priorityTag = rightSection.createEl('span', {
+                    text: task.priority,
+                    cls: `task-priority task-priority-${task.priority.toLowerCase()}`
+                });
+            }
+            
+            // 紧急标记
+            if (task.isUrgent) {
+                rightSection.createEl('span', {
+                    text: '紧急',
+                    cls: 'task-tag task-tag-urgent'
+                });
+            }
+            
+            // 重要标记
+            if (task.isImportant) {
+                rightSection.createEl('span', {
+                    text: '重要',
+                    cls: 'task-tag task-tag-important'
+                });
+            }
+            
+            // 分类标签
+            if (task.category) {
+                rightSection.createEl('span', {
+                    text: task.category,
+                    cls: 'task-tag task-tag-category'
+                });
+            }
+            
+            checkbox.addEventListener('change', (e) => {
+                const target = e.target as HTMLInputElement;
+                if (target.checked) {
+                    this.selectedTasks.add(task.id);
+                } else {
+                    this.selectedTasks.delete(task.id);
+                }
+                selectAllCheckbox.checked = checkboxes.every(cb => cb.checked);
+                selectAllCheckbox.indeterminate = checkboxes.some(cb => cb.checked) && !checkboxes.every(cb => cb.checked);
+            });
+        });
+        
+        // 全选/取消全选的事件处理
+        selectAllCheckbox.addEventListener('change', (e) => {
+            const target = e.target as HTMLInputElement;
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = target.checked;
+                const taskId = checkbox.getAttribute('id');
+                if (taskId) {
+                    if (target.checked) {
+                        this.selectedTasks.add(taskId);
+                    } else {
+                        this.selectedTasks.delete(taskId);
+                    }
+                }
+            });
+        });
+        
+        // 创建按钮容器
+        const buttonContainer = contentEl.createEl('div', { cls: 'task-import-buttons' });
+        
+        const importButton = buttonContainer.createEl('button', {
+            text: '导入所选任务',
+            cls: 'mod-cta'
+        });
+        
+        importButton.addEventListener('click', () => {
+            const selectedTasks = this.tasks.filter(task => 
+                this.selectedTasks.has(task.id)
+            );
+            this.onConfirm(selectedTasks);
+            this.close();
+        });
+    }
+
+    onClose() {
+        const { contentEl } = this;
+        contentEl.empty();
     }
 }
 

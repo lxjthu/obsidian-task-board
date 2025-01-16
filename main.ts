@@ -1,6 +1,6 @@
 import { Plugin } from 'obsidian';
+import { Chart } from 'chart.js/auto';
 import { TaskBoardView, VIEW_TYPE_TASK_BOARD } from './src/taskBoard';
-
 export default class TaskBoardPlugin extends Plugin {
     async onload() {
         // 确保视图类型匹配
@@ -29,6 +29,12 @@ export default class TaskBoardPlugin extends Plugin {
                 this.app.vault.createFolder('daily');
             }
         });
+
+        // 添加图表渲染函数到全局
+        (window as any).renderChart = (chartData: any, container: HTMLElement) => {
+            const canvas = container.createEl('canvas');
+            new Chart(canvas, chartData);
+        };
     }
 
     async onunload() {

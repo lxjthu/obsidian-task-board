@@ -1,8 +1,10 @@
 export enum TaskPriority {
-    HIGH = "高",
-    MEDIUM = "中",
-    LOW = "低",
-    NONE = "无"
+    HIGHEST = 'HIGHEST', // 🔺
+    HIGH = 'HIGH',      // ⏫
+    MEDIUM = 'MEDIUM',  // 🔼
+    LOW = 'LOW',        // 🔽
+    LOWEST = 'LOWEST',  // ⏬
+    NONE = 'NONE'      // 无优先级
 }
 
 export interface Task {
@@ -26,6 +28,14 @@ export interface Task {
     reminderTime?: string;
     hideBeforeStart?: boolean;
     priority: TaskPriority;
+    actualStartTime?: number;
+    timeRecords: {
+        date: string;
+        startTime: number;
+        pauseTimes: { start: number; end: number; }[];
+        dailyTimeSpent: number;
+    }[];
+    totalTimeSpent: number;
 } 
 
 enum TaskCategory {
