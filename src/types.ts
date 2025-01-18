@@ -36,6 +36,7 @@ export interface Task {
         dailyTimeSpent: number;
     }[];
     totalTimeSpent: number;
+    lastReminder?: string; // 最后一次提醒时间  
 } 
 
 enum TaskCategory {

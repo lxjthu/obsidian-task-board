@@ -688,7 +688,7 @@ export class TaskBoardView extends ItemView {
                             frontmatterMatch[1].trim() + '\n'
                         );
 
-                        content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---\n`);
+                        content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---`);
                         await this.app.vault.modify(readmeFile, content);
                     }
                 }
@@ -907,15 +907,14 @@ export class TaskBoardView extends ItemView {
                             // 添加新属性行，保持一个换行符
                             return acc + `${key}: ${value}\n`;
                         },
-                        currentFrontmatter + '\n'  // 只在开始时添加一个换行符
+                        currentFrontmatter   // 只在开始时添加一个换行符
                     );
                     // 确保 frontmatter 前后只有一个换行符
-                    content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---\n`);
+                    content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---`);
                 }
                 
                 // 生成时间记录
                 const timeRecord = [
-                    '',
                     `开始时间：${moment(todayRecord?.startTime).format('HH:mm:ss')}`,  // 使用今天第一次开始的时间
                     '- 持续时间段：',
                     ...(todayRecord?.pauseTimes || []).map((time, index) => 
@@ -933,7 +932,10 @@ export class TaskBoardView extends ItemView {
                         `## 时间记录\n${timeRecord}`
                     );
                 } else {
-                    content += '\n## 时间记录\n' + timeRecord;
+                    if (!content.endsWith('\n')) {
+                        content += '\n';
+                    }
+                    content += `## 时间记录\n${timeRecord}`;
                 }
 
                 await this.app.vault.modify(file, content);
@@ -1269,13 +1271,13 @@ export class TaskBoardView extends ItemView {
                     }
                     return acc + `${key}: ${value}\n`;
                 },
-                currentFrontmatter + '\n'  // 确保现有内容后有换行符
+                currentFrontmatter   // 确保现有内容后有换行符
             );
             
             // 确保 frontmatter 前后都有换行符，并去除多余的空行
             const newContent = content.replace(
                 frontmatterRegex, 
-                `---\n${updatedFrontmatter.trim()}\n---\n`
+                `---\n${updatedFrontmatter.trim()}\n---`
             );
             
             await this.app.vault.modify(file, newContent);
@@ -1431,10 +1433,10 @@ export class TaskBoardView extends ItemView {
                             }
                             return acc + `${key}: ${value}\n`;
                         },
-                        frontmatterMatch[1].trim() + '\n'
+                        frontmatterMatch[1].trim() 
                     );
 
-                    content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---\n`);
+                    content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---`);
                     await this.app.vault.modify(file, content);
                 }
             }
@@ -1913,10 +1915,10 @@ export class TaskBoardView extends ItemView {
                                 }
                                 return acc + `${key}: ${value}\n`;
                             },
-                            currentFrontmatter + '\n'
+                            currentFrontmatter 
                         );
 
-                        content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---\n`);
+                        content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---`);
                         await this.app.vault.modify(file, content);
                     }
                 }
@@ -1944,10 +1946,10 @@ export class TaskBoardView extends ItemView {
                                 }
                                 return acc + `${key}: ${value}\n`;
                             },
-                            frontmatterMatch[1].trim() + '\n'
+                            frontmatterMatch[1].trim() 
                         );
 
-                        content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---\n`);
+                        content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---`);
                         await this.app.vault.modify(readmeFile, content);
                     }
                 }
@@ -2123,28 +2125,26 @@ export class TaskBoardView extends ItemView {
         const now = moment();
         this.data.tasks.forEach(task => {
             if (task.reminder && task.reminderTime) {
-                const reminderTime = moment(task.reminderTime);
-                // 如果时间差在1分钟内
-                if (Math.abs(now.diff(reminderTime, 'minutes')) < 1) {
-                    // 触发提醒
-                    new Notice(`任务提醒：${task.title} 需要处理了！`, 10000);
-                    
-                    // 如果不是打卡任务，关闭提醒
-                    if (task.type !== 'checkin') {
+                if (task.type === 'checkin') {
+                    // 打卡任务：只比较时间部分
+                    const reminderTime = moment(task.reminderTime).format('HH:mm');
+                    const currentTime = now.format('HH:mm');
+                    const today = now.format('YYYY-MM-DD');
+                    const hasRemindedToday = task.lastReminder === today;
+
+                    if (reminderTime === currentTime && !hasRemindedToday) {
+                        new Notice(`打卡提醒：${task.title} 需要打卡了！`, 10000);
+                        task.lastReminder = today;
+                        this.saveData();
+                    }
+                } else {
+                    // 普通任务：比较完整的日期时间
+                    const reminderTime = moment(task.reminderTime);
+                    if (Math.abs(now.diff(reminderTime, 'minutes')) < 1) {
+                        new Notice(`任务提醒：${task.title} 需要处理了！`, 10000);
                         task.reminder = false;
                         this.saveData();
                     }
-                }
-            }
-
-            // 检查截止时间
-            if (task.dueDate && !task.completed) {
-                const dueTime = moment(task.dueDate);
-                const hoursLeft = dueTime.diff(now, 'hours');
-                
-                // 如果距离截止时间小于1小时
-                if (hoursLeft >= 0 && hoursLeft < 1) {
-                    new Notice(`任务警告：${task.title} 即将到期！`, 10000);
                 }
             }
         });
@@ -2579,28 +2579,72 @@ class TaskModal extends Modal {
         this.reminderToggle.type = 'checkbox';
         this.reminderToggle.checked = this.task.reminder ?? false;
 
+        // 任务类型选择改变时更新提醒时间输入框
+        this.typeSelect.addEventListener('change', (e) => {
+            const isCheckin = (e.target as HTMLSelectElement).value === 'checkin';
+            if (this.reminderToggle.checked) {
+                // 重新创建提醒时间输入框
+                const oldValue = this.reminderTimeInput.value;
+                this.reminderTimeInput.remove();
+                
+                if (isCheckin) {
+                    // 打卡任务：只显示时间选择
+                    this.reminderTimeInput = reminderTimeContainer.createEl('input', {
+                        type: 'time',
+                        value: oldValue ? moment(oldValue).format('HH:mm') : '09:00'
+                    });
+                } else {
+                    // 普通任务：显示日期和时间
+                    this.reminderTimeInput = reminderTimeContainer.createEl('input', {
+                        type: 'datetime-local',
+                        value: oldValue ? moment(oldValue).format('YYYY-MM-DDTHH:mm') : ''
+                    });
+                }
+            }
+        });
+
         // 提醒时间选择（默认隐藏）
         const reminderTimeContainer = contentEl.createDiv('task-reminder-time-container');
         reminderTimeContainer.style.display = this.task.reminder ? 'block' : 'none';
         reminderTimeContainer.createEl('label', { text: '提醒时间' });
-        this.reminderTimeInput = reminderTimeContainer.createEl('input', {
-            type: 'datetime-local',
-            value: this.task.reminderTime ? moment(this.task.reminderTime).format('YYYY-MM-DDTHH:mm') : 
-                   this.startDateInput.value ? this.startDateInput.value : ''
-        });
+        
+        // 根据任务类型初始化提醒时间输入框
+        if (this.typeSelect.value === 'checkin') {
+            this.reminderTimeInput = reminderTimeContainer.createEl('input', {
+                type: 'time',
+                value: this.task.reminderTime ? 
+                    moment(this.task.reminderTime).format('HH:mm') : 
+                    '09:00'
+            });
+        } else {
+            this.reminderTimeInput = reminderTimeContainer.createEl('input', {
+                type: 'datetime-local',
+                value: this.task.reminderTime ? 
+                    moment(this.task.reminderTime).format('YYYY-MM-DDTHH:mm') : 
+                    ''
+            });
+        }
 
         // 显示/隐藏提醒时间选择
         this.reminderToggle.addEventListener('change', (e) => {
             const isChecked = (e.target as HTMLInputElement).checked;
             reminderTimeContainer.style.display = isChecked ? 'block' : 'none';
-            // 当开启提醒时，自动填入开始时间
-            if (isChecked && !this.reminderTimeInput.value && this.startDateInput.value) {
-                // 如果开始时间只有日期，则设置提醒时间为当天早上9点
-                if (!this.startDateInput.value.includes(':')) {
-                    const startDate = moment(this.startDateInput.value).format('YYYY-MM-DD');
-                    this.reminderTimeInput.value = `${startDate}T09:00`;
+            
+            // 当开启提醒时，自动填入时间
+            if (isChecked && !this.reminderTimeInput.value) {
+                if (this.typeSelect.value === 'checkin') {
+                    // 打卡任务默认设置为早上9点
+                    this.reminderTimeInput.value = '09:00';
                 } else {
-                    this.reminderTimeInput.value = this.startDateInput.value;
+                    // 普通任务使用开始时间
+                    if (this.startDateInput.value) {
+                        if (!this.startDateInput.value.includes(':')) {
+                            const startDate = moment(this.startDateInput.value).format('YYYY-MM-DD');
+                            this.reminderTimeInput.value = `${startDate}T09:00`;
+                        } else {
+                            this.reminderTimeInput.value = this.startDateInput.value;
+                        }
+                    }
                 }
             }
         });
@@ -2635,6 +2679,19 @@ class TaskModal extends Modal {
         saveButton.addEventListener('click', () => {
             const title = this.titleInput.value.trim();
             if (title) {
+                // 处理提醒时间
+                let reminderTime = undefined;
+                if (this.reminderToggle.checked && this.reminderTimeInput.value) {
+                    if (this.typeSelect.value === 'checkin') {
+                        // 打卡任务：使用今天的日期加上选择的时间
+                        const timeOnly = this.reminderTimeInput.value; // 格式: "HH:mm"
+                        reminderTime = moment().format('YYYY-MM-DD') + 'T' + timeOnly;
+                    } else {
+                        // 普通任务：使用完整的日期时间
+                        reminderTime = this.reminderTimeInput.value;
+                    }
+                }
+
                 this.onSubmit({
                     title,
                     category: this.categorySelect.value,
@@ -2642,7 +2699,7 @@ class TaskModal extends Modal {
                     startDate: this.startDateInput.value,
                     dueDate: this.dueDateInput.value,
                     reminder: this.reminderToggle.checked,
-                    reminderTime: this.reminderToggle.checked ? this.reminderTimeInput.value : undefined,
+                    reminderTime: reminderTime,
                     hideBeforeStart: this.hideBeforeStartToggle.checked,
                     isUrgent: this.isUrgentToggle.checked,
                     isImportant: this.isImportantToggle.checked,
