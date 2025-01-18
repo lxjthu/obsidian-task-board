@@ -1,5 +1,5 @@
 import moment from 'moment';
-import { ItemView, WorkspaceLeaf, App, Modal, Setting, Notice, TFile } from 'obsidian';
+import { ItemView, WorkspaceLeaf, App, Modal, Setting, Notice, TFile, TFolder } from 'obsidian';
 import { Task, TaskPriority } from './types';
 import * as yaml from 'js-yaml';
 
@@ -26,57 +26,11 @@ interface TaskCompletion {
     timeSpent: number;
 }
 
-// 创建反思对话框
-class ReflectionModal extends Modal {
-    private reflection: string = '';
-    private onSubmit: (reflection: string) => void;
 
-    constructor(app: App, onSubmit: (reflection: string) => void) {
-        super(app);
-        this.onSubmit = onSubmit;
-    }
-
-    onOpen() {
-        const { contentEl } = this;
-        contentEl.empty();
-
-        contentEl.createEl('h2', { text: '完成任务' });
-
-        const textArea = contentEl.createEl('textarea', {
-            attr: {
-                placeholder: '记录一下完成心得...',
-                rows: '6',
-                style: 'width: 100%; margin: 10px 0;'
-            }
-        });
-
-        textArea.addEventListener('input', (e) => {
-            this.reflection = (e.target as HTMLTextAreaElement).value;
-        });
-
-        const buttonContainer = contentEl.createEl('div', {
-            cls: 'reflection-button-container'
-        });
-
-        const submitButton = buttonContainer.createEl('button', {
-            text: '提交',
-            cls: 'mod-cta'
-        });
-
-        submitButton.addEventListener('click', () => {
-            this.onSubmit(this.reflection);
-            this.close();
-        });
-    }
-
-    onClose() {
-        const { contentEl } = this;
-        contentEl.empty();
-    }
-}
 
 type ObsidianHTMLElement = HTMLElement;
 
+// 任务看板视图      
 export class TaskBoardView extends ItemView {
     contentEl: ObsidianHTMLElement;
     containerEl: ObsidianHTMLElement;
@@ -134,17 +88,17 @@ export class TaskBoardView extends ItemView {
         // 启动提醒检查
         this.startReminderCheck();
     }
-
+    // 创建头部 
     private createHeader() {
         const header = this.contentEl.createEl('div', { cls: 'task-board-header' });
         header.createEl('h2', { text: '任务看板' });
     }
-
+    // 创建用户选择和管理界面 
     private createUserSection() {
         const userSection = this.contentEl.createEl('div', { cls: 'task-board-user-section' });
         // 用户选择和管理界面
     }
-
+    // 任务添加 
     private createTaskSection() {
         const taskSection = this.contentEl.createEl("div", { cls: "task-board-task-section" });
         const addButton = taskSection.createEl("button", { text: "\u6DFB\u52A0\u4EFB\u52A1" });
@@ -156,7 +110,7 @@ export class TaskBoardView extends ItemView {
         const taskList = taskSection.createEl("div", { cls: "task-list" });
         this.renderTasks(taskList);
     }
-
+    // 任务排序     
     private sortTasks(tasks: Task[]): Task[] {
         const priorityOrder = {
             [TaskPriority.HIGHEST]: 5,
@@ -176,14 +130,14 @@ export class TaskBoardView extends ItemView {
         });
     }
 
-
+    // 任务导入 
     private async importFromObsidian() {
         const activeFile = this.app.workspace.getActiveFile();
         if (!activeFile) {
             new Notice('请先打开包含任务列表的笔记');
             return;
         }
-    
+
         try {
             const content = await this.app.vault.read(activeFile);
             const tasks = this.parseObsidianTasksToBoard(content);
@@ -192,7 +146,7 @@ export class TaskBoardView extends ItemView {
                 new Notice('未在当前笔记中找到任务');
                 return;
             }
-    
+
             // 显示导入预览对话框
             new TaskImportModal(this.app, tasks, async (selectedTasks) => {
                 if (selectedTasks.length === 0) {
@@ -200,8 +154,42 @@ export class TaskBoardView extends ItemView {
                     return;
                 }
                 
+                // 为每个导入的任务创建文件结构
+                for (const task of selectedTasks) {
+                    try {
+                        const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+                        const taskFolder = `tasks/${fileName}`;
+                        
+                        // 创建任务文件夹
+                        if (!await this.app.vault.adapter.exists(taskFolder)) {
+                            await this.app.vault.createFolder(taskFolder);
+                        }
+
+                        // 创建记录文件夹
+                        const recordFolder = `${taskFolder}/${task.type === 'checkin' ? '打卡记录' : '进展记录'}`;
+                        if (!await this.app.vault.adapter.exists(recordFolder)) {
+                            await this.app.vault.createFolder(recordFolder);
+                        }
+
+                        // 创建 README.md（总览页面）
+                        const readmePath = `${taskFolder}/README.md`;
+                        if (!await this.app.vault.adapter.exists(readmePath)) {
+                            const content = task.type === 'checkin' 
+                                ? this.generateCheckinTaskContent(task)
+                                : this.generateNormalTaskContent(task);
+                            await this.app.vault.create(readmePath, content);
+                        }
+                    } catch (error) {
+                        console.error(`为任务 ${task.title} 创建文件结构失败:`, error);
+                        new Notice(`为任务 ${task.title} 创建文件结构失败`);
+                    }
+                }
+                
+                // 添加任务到数据中并保存
                 this.data.tasks.push(...selectedTasks);
                 await this.saveData();
+                
+                // 更新任务列表显示
                 const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
                 if (taskList) {
                     this.renderTasks(taskList);
@@ -209,13 +197,14 @@ export class TaskBoardView extends ItemView {
                 
                 new Notice(`成功导入 ${selectedTasks.length} 个任务`);
             }).open();
-    
+
         } catch (error) {
             console.error('导入失败:', error);
             new Notice('导入失败，请检查笔记格式');
         }
     }
 
+    // 任务导入的具体方法 
     private parseObsidianTasksToBoard(content: string): Task[] {
         const tasks: Task[] = [];
         const taskLines = content.split('\n').filter(line => 
@@ -578,7 +567,7 @@ export class TaskBoardView extends ItemView {
         const totalSeconds = task.timeSpent + Math.floor((now - (task.timerStartTime || now)) / 1000);
         displayEl.textContent = this.formatTime(totalSeconds);
     }
-
+    // 待修改：计时器开始/暂停  
     private async toggleTimer(taskId: string, timeDisplay: HTMLElement) {
         const task = this.data.tasks.find(t => t.id === taskId);
         if (!task) return;
@@ -602,11 +591,8 @@ export class TaskBoardView extends ItemView {
             
             if (task.type === 'checkin') {
                 // 打卡任务记录当天用时和时间段
-               
-                // 初始化或获取今天的记录
                 if (!todayRecord) {
                     task.timeSpent = Math.floor(elapsed / 1000);  // 只计算今天的第一段时间
-        
                     todayRecord = {
                         date: today,
                         startTime: task.timerStartTime || now,
@@ -617,8 +603,11 @@ export class TaskBoardView extends ItemView {
                 } else {
                     // 同一天，累加时间
                     task.timeSpent = (task.timeSpent || 0) + Math.floor(elapsed / 1000);
-                    todayRecord.dailyTimeSpent = task.timeSpent;  // 更新当日用时
+                    todayRecord.dailyTimeSpent = task.timeSpent;
                 }
+                
+                // 同时更新总时间
+                task.totalTimeSpent = (task.totalTimeSpent || 0) + Math.floor(elapsed / 1000);
                 
                 // 记录本次持续时间段
                 todayRecord.pauseTimes.push({
@@ -671,6 +660,39 @@ export class TaskBoardView extends ItemView {
                 clearInterval(this.data.timers[taskId]);
                 delete this.data.timers[taskId];
             }
+
+            // 更新总览页面的 total_time_spent
+            const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+            const readmePath = `tasks/${fileName}/README.md`;
+            
+            if (await this.app.vault.adapter.exists(readmePath)) {
+                const readmeFile = this.app.vault.getAbstractFileByPath(readmePath) as TFile;
+                if (readmeFile instanceof TFile) {
+                    let content = await this.app.vault.read(readmeFile);
+                    const frontmatterRegex = /---([\s\S]*?)---/;
+                    const frontmatterMatch = content.match(frontmatterRegex);
+                    
+                    if (frontmatterMatch) {
+                        const frontmatterUpdate = {
+                            total_time_spent: this.formatTime(task.totalTimeSpent || 0)
+                        };
+
+                        const updatedFrontmatter = Object.entries(frontmatterUpdate).reduce(
+                            (acc, [key, value]) => {
+                                const regex = new RegExp(`${key}:.*(\r?\n|\n|$)`, 'g');
+                                if (acc.match(regex)) {
+                                    return acc.replace(regex, `${key}: ${value}\n`);
+                                }
+                                return acc + `${key}: ${value}\n`;
+                            },
+                            frontmatterMatch[1].trim() + '\n'
+                        );
+
+                        content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---\n`);
+                        await this.app.vault.modify(readmeFile, content);
+                    }
+                }
+            }
         } else {
             // 开始/继续计时器
             task.isTimerRunning = true;
@@ -692,14 +714,18 @@ export class TaskBoardView extends ItemView {
             } else {
                 if (!task.actualStartTime) {
                     task.actualStartTime = now;
-                    // 初始化今天的记录
+                }
+                
+                // 初始化或获取今天的记录
+                if (!todayRecord) {
                     todayRecord = {
                         date: today,
-                        startTime: now,
+                        startTime: now,  // 这是今天第一次开始的时间
                         pauseTimes: [],
                         dailyTimeSpent: 0
                     };
                     task.timeRecords.push(todayRecord);
+                    task.timeSpent = 0;  // 重置当日计时
                     await this.updateTaskTimeRecord(task, 'start');
                 } else {
                     await this.updateTaskTimeRecord(task, 'resume');
@@ -716,8 +742,19 @@ export class TaskBoardView extends ItemView {
             this.data.timers[taskId] = window.setInterval(() => {
                 if (task.isTimerRunning && task.timerStartTime) {
                     const currentTime = Date.now();
-                    const totalSeconds = task.timeSpent + Math.floor((currentTime - task.timerStartTime) / 1000);
-                    timeDisplay.textContent = this.formatTime(totalSeconds);
+                    const currentDate = moment().format('YYYY-MM-DD');
+                    const todayRecord = task.timeRecords.find(r => r.date === currentDate);
+                    
+                    // 如果是新的一天，或者没有今天的记录，从零开始计时
+                    if (!todayRecord || todayRecord.date !== currentDate) {
+                        const elapsed = Math.floor((currentTime - task.timerStartTime) / 1000);
+                        timeDisplay.textContent = this.formatTime(elapsed);
+                    } else {
+                        // 当天内累计时间
+                        const elapsed = Math.floor((currentTime - task.timerStartTime) / 1000);
+                        const totalSeconds = (task.timeSpent || 0) + elapsed;
+                        timeDisplay.textContent = this.formatTime(totalSeconds);
+                    }
                 }
             }, 1000);
         }
@@ -727,9 +764,10 @@ export class TaskBoardView extends ItemView {
 
         // 打开对应的笔记
         const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        const recordFileName = `${task.title}-${moment().format('YYYY-MM-DD')}`.replace(/[\\/:*?"<>|]/g, '');
         const filePath = task.type === 'checkin'
-            ? `tasks/${fileName}/打卡记录/${moment().format('YYYY-MM-DD')}.md`
-            : `tasks/${fileName}.md`;
+            ? `tasks/${fileName}/打卡记录/${recordFileName}.md`
+            : `tasks/${fileName}/进展记录/${recordFileName}.md`;  // 修改为正确的路径
 
         try {
             // 检查文件是否存在
@@ -758,6 +796,7 @@ export class TaskBoardView extends ItemView {
                         `time: ${moment().format('HH:mm:ss')}`,
                         'tags:',
                         '  - 打卡记录',
+                        `  - ${task.category || '其他'}`,
                         '---',
                         '',
                         '## 时间记录',
@@ -776,10 +815,10 @@ export class TaskBoardView extends ItemView {
                         `created: ${moment().format('YYYY-MM-DD HH:mm:ss')}`,
                         `planned_start: ${task.startDate ? moment(task.startDate).format('YYYY-MM-DD HH:mm:ss') : ''}`,
                         `actual_start: ${task.actualStartTime ? moment(task.actualStartTime).format('YYYY-MM-DD HH:mm:ss') : ''}`,
+                        `date: ${moment().format('YYYY-MM-DD')}`,
                         `today_start: ${todayRecord?.startTime ? moment(todayRecord.startTime).format('YYYY-MM-DD HH:mm:ss') : ''}`,
                         `completed_at: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
                         `daily_time_spent: ${todayRecord ? this.formatTime(todayRecord.dailyTimeSpent) : '00:00:00'}`,
-                        `total_time_spent: ${this.formatTime(task.totalTimeSpent || 0)}`,
                         `due: ${task.dueDate ? moment(task.dueDate).format('YYYY-MM-DD HH:mm:ss') : ''}`,
                         'status: 进行中',
                         'tags:',
@@ -812,96 +851,96 @@ export class TaskBoardView extends ItemView {
             new Notice('打开或创建笔记失败');
         }
     }
-
+    // 待修改：任务时间记录更新 
     private async updateTaskTimeRecord(task: Task, action: 'start' | 'pause' | 'resume' | 'complete', elapsed?: number) {
-        if (task.type === 'checkin') {  // 打卡任务的处理
-            const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
-            const filePath = `tasks/${fileName}/打卡记录/${moment().format('YYYY-MM-DD')}.md`;
+        const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        const today = moment().format('YYYY-MM-DD');
+        const recordFileName = `${task.title}-${today}`.replace(/[\\/:*?"<>|]/g, '');
+        const recordFolder = `tasks/${fileName}/${task.type === 'checkin' ? '打卡记录' : '进展记录'}`;
+        const filePath = `${recordFolder}/${recordFileName}.md`;
 
-            try {
-                if (await this.app.vault.adapter.exists(filePath)) {
-                    const file = this.app.vault.getAbstractFileByPath(filePath);
-                    if (file instanceof TFile) {
-                        let content = await this.app.vault.read(file);
-                        
-                        // 获取今天的记录
-                        const todayRecord = task.timeRecords.find(r => r.date === moment().format('YYYY-MM-DD'));
-                        
-                        // 生成时间记录
-                        const timeRecord = [
-                            '',
-                            `开始时间：${moment(todayRecord?.startTime).format('HH:mm:ss')}`,
-                            '- 持续时间段：',
-                            ...(todayRecord?.pauseTimes || []).map((time, index) => 
-                                `  ${index + 1}. ${moment(time.start).format('HH:mm:ss')} - ${moment(time.end).format('HH:mm:ss')}`
-                            ),
-                            `- 当日用时：${this.formatTime(task.timeSpent || 0)}`,
-                            ''
-                        ].join('\n');
-
-                        // 查找或创建时间记录部分
-                        const timeRecordSectionRegex = /## 时间记录\n[\s\S]*?(?=\n## |$)/;
-                        if (timeRecordSectionRegex.test(content)) {
-                            content = content.replace(
-                                timeRecordSectionRegex,
-                                `## 时间记录\n${timeRecord}`
-                            );
-                        } else {
-                            content += '\n## 时间记录\n' + timeRecord;
-                        }
-
-                        await this.app.vault.modify(file, content);
-                    }
-                }
-            } catch (error) {
-                console.error('更新时间记录失败:', error);
-                new Notice('更新时间记录失败');
+        try {
+            // 确保文件夹存在
+            if (!await this.app.vault.adapter.exists(recordFolder)) {
+                await this.app.vault.createFolder(recordFolder);
             }
-        }
-        if (task.type !== 'checkin') {  // 非打卡任务的处理
-            const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
-            const filePath = `tasks/${fileName}.md`;
-        
-            try {
-                if (await this.app.vault.adapter.exists(filePath)) {
-                    const file = this.app.vault.getAbstractFileByPath(filePath);
-                    if (file instanceof TFile) {
-                        let content = await this.app.vault.read(file);
-                        
-                        // 获取今天的记录
-                        const todayRecord = task.timeRecords.find(r => r.date === moment().format('YYYY-MM-DD'));
-                        
-                        // 生成时间记录
-                        const timeRecord = [
-                            '',
-                            `开始时间：${moment(todayRecord?.startTime).format('HH:mm:ss')}`,
-                            '- 持续时间段：',
-                            ...(todayRecord?.pauseTimes || []).map((time, index) => 
-                                `  ${index + 1}. ${moment(time.start).format('HH:mm:ss')} - ${moment(time.end).format('HH:mm:ss')}`
-                            ),
-                            `- 当日用时：${this.formatTime(task.timeSpent || 0)}`,
-                            `- 累计用时：${this.formatTime(task.totalTimeSpent || 0)}`,
-                            ''
-                        ].join('\n');
-        
-                        // 查找或创建时间记录部分
-                        const timeRecordSectionRegex = /## 时间记录\n[\s\S]*?(?=\n## |$)/;
-                        if (timeRecordSectionRegex.test(content)) {
-                            content = content.replace(
-                                timeRecordSectionRegex,
-                                `## 时间记录\n${timeRecord}`
-                            );
-                        } else {
-                            content += '\n## 时间记录\n' + timeRecord;
-                        }
-        
-                        await this.app.vault.modify(file, content);
-                    }
-                }
-            } catch (error) {
-                console.error('更新时间记录失败:', error);
-                new Notice('更新时间记录失败');
+
+            // 获取今天的记录
+            const todayRecord = task.timeRecords.find(r => r.date === today);
+
+            // 如果文件不存在，先创建文件
+            if (!await this.app.vault.adapter.exists(filePath)) {
+                // 使用现有的生成方法创建初始内容
+                const initialContent = task.type === 'checkin' 
+                    ? this.generateCheckinRecordContent(task, today)
+                    : this.generateTaskRecordContent(task, today);
+                await this.app.vault.create(filePath, initialContent);
             }
+
+            // 更新文件内容
+            const file = this.app.vault.getAbstractFileByPath(filePath);
+            if (file instanceof TFile) {
+                let content = await this.app.vault.read(file);
+                
+                // 更新 frontmatter
+                const frontmatterUpdate = {
+                    today_start: todayRecord?.startTime ? moment(todayRecord.startTime).format('HH:mm:ss') : '',  // 使用今天第一次开始的时间
+                    today_end: action === 'pause' ? moment().format('HH:mm:ss') : '',
+                    daily_time_spent: this.formatTime(task.timeSpent || 0),
+                    status: action === 'complete' ? 
+                        (task.type === 'checkin' ? '已打卡' : '已完成') : 
+                        '进行中'
+                };
+
+                // 更新文件的 frontmatter
+                const frontmatterRegex = /---([\s\S]*?)---/;
+                const frontmatterMatch = content.match(frontmatterRegex);
+                if (frontmatterMatch) {
+                    const currentFrontmatter = frontmatterMatch[1].trim();
+                    const updatedFrontmatter = Object.entries(frontmatterUpdate).reduce(
+                        (acc, [key, value]) => {
+                            const regex = new RegExp(`${key}:.*(\r?\n|\n|$)`, 'g');
+                            if (acc.match(regex)) {
+                                // 替换现有的属性行，保持一个换行符
+                                return acc.replace(regex, `${key}: ${value}\n`);
+                            }
+                            // 添加新属性行，保持一个换行符
+                            return acc + `${key}: ${value}\n`;
+                        },
+                        currentFrontmatter + '\n'  // 只在开始时添加一个换行符
+                    );
+                    // 确保 frontmatter 前后只有一个换行符
+                    content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---\n`);
+                }
+                
+                // 生成时间记录
+                const timeRecord = [
+                    '',
+                    `开始时间：${moment(todayRecord?.startTime).format('HH:mm:ss')}`,  // 使用今天第一次开始的时间
+                    '- 持续时间段：',
+                    ...(todayRecord?.pauseTimes || []).map((time, index) => 
+                        `  ${index + 1}. ${moment(time.start).format('HH:mm:ss')} - ${moment(time.end).format('HH:mm:ss')}`
+                    ),
+                    `- 当日用时：${this.formatTime(task.timeSpent || 0)}`,
+                    ''
+                ].join('\n');
+
+                // 查找或创建时间记录部分
+                const timeRecordSectionRegex = /## 时间记录\n[\s\S]*?(?=\n## |$)/;
+                if (timeRecordSectionRegex.test(content)) {
+                    content = content.replace(
+                        timeRecordSectionRegex,
+                        `## 时间记录\n${timeRecord}`
+                    );
+                } else {
+                    content += '\n## 时间记录\n' + timeRecord;
+                }
+
+                await this.app.vault.modify(file, content);
+            }
+        } catch (error) {
+            console.error('更新时间记录失败:', error);
+            new Notice('更新时间记录失败');
         }
     }
 
@@ -1104,8 +1143,12 @@ export class TaskBoardView extends ItemView {
                     priority: result.priority || TaskPriority.NONE,
                     timeRecords: [],          // 添加这行
                     totalTimeSpent: 0         // 添加这行
-                });
+                    });
                 await this.saveData();
+                 // 在这里添加创建笔记的步骤
+                const newTask = this.data.tasks[this.data.tasks.length - 1]; // 获取刚刚添加的任务
+                await this.createTaskNote(newTask);
+            
                 const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
                 if (taskList) {
                     this.renderTasks(taskList);
@@ -1115,155 +1158,130 @@ export class TaskBoardView extends ItemView {
         });
         modal.open();
     }
-
+    // 待修改：任务完成     
     private async toggleTask(taskId: string) {
         const task = this.data.tasks.find(t => t.id === taskId);
         if (!task) return;
 
-        // 如果是打卡任务
-        if (task.type === 'checkin') {
-            const today = moment().format('YYYY-MM-DD');
-            const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
-            const checkinPath = `tasks/${fileName}/打卡记录/${today}.md`;
-            
-            // 检查今天的打卡文件是否已存在
-            const fileExists = await this.app.vault.adapter.exists(checkinPath);
-            
-            if (task.completed) {
-                // 弹出确认对话框
-                const confirmResult = await new Promise<string>(resolve => {
-                    const modal = new Modal(this.app);
-                    modal.titleEl.setText('重新打卡确认');
-                    modal.contentEl.createEl('p', { text: '是否重新打卡？' });
-                    modal.contentEl.createEl('p', { text: '选择"删除"将清除今天的打卡记录重新开始，选择"继续"将保留开始时间，仅更新完成时间。' });
-                    
-                    const buttonContainer = modal.contentEl.createDiv({ cls: 'button-container' });
-                    
-                    const deleteButton = buttonContainer.createEl('button', { text: '删除' });
-                    deleteButton.addEventListener('click', () => {
-                        modal.close();
-                        resolve('delete');
-                    });
-                    
-                    const continueButton = buttonContainer.createEl('button', { text: '继续' });
-                    continueButton.addEventListener('click', () => {
-                        modal.close();
-                        resolve('continue');
-                    });
-                    
-                    const cancelButton = buttonContainer.createEl('button', { text: '取消' });
-                    cancelButton.addEventListener('click', () => {
-                        modal.close();
-                        resolve('cancel');
-                    });
-                    
-                    modal.open();
-                });
+        const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        const today = moment().format('YYYY-MM-DD');
+        const recordFileName = `${task.title}-${today}`.replace(/[\\/:*?"<>|]/g, '');
+        const recordFolder = `tasks/${fileName}/${task.type === 'checkin' ? '打卡记录' : '进展记录'}`;
+        const recordPath = `${recordFolder}/${recordFileName}.md`;
+        const readmePath = `tasks/${fileName}/README.md`;
 
-                if (confirmResult === 'delete') {
-                    // 取消复选框
-                    task.completed = false;
-                    delete task.completedAt;
-                    if (task.isTimerRunning) {
-                        task.isTimerRunning = false;
-                        delete task.timerStartTime;
-                    }
-                    task.timeSpent = 0; // 重置用时
-                    
-                    // 删除今天的打卡记录
-                    if (fileExists) {
-                        const file = this.app.vault.getAbstractFileByPath(checkinPath);
-                        if (file instanceof TFile) {
-                            await this.app.vault.delete(file);
-                        }
-                    }
-                } else if (confirmResult === 'continue') {
-                    // 取消复选框
-                    task.completed = false;
-                } else if (confirmResult === 'cancel') {
-                    // 保持复选框选中状态
-                    return;
-                }
-            } else {
-                // 设置完成时间
-                task.completedAt = Date.now();
+        // 切换任务状态
+        task.completed = !task.completed;
         
-                // 新建打卡记录或更新现有记录
-                if (fileExists) {
-                    // 更新现有记录
-                    const file = this.app.vault.getAbstractFileByPath(checkinPath) as TFile;
-                    const content = await this.app.vault.read(file);
-                    await this.updateCheckinNoteFrontmatter(task, checkinPath);
-                } else {
-                    // 新建打卡记录
-                    await this.completeCheckinTask(task, '');
+        if (task.completed) {
+            // 设置完成时间
+            task.completedAt = Date.now();
+            const completedTime = moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss');
+            
+            // 如果计时器正在运行，停止它
+            if (task.isTimerRunning) {
+                task.isTimerRunning = false;
+                if (this.data.timers[taskId]) {
+                    clearInterval(this.data.timers[taskId]);
+                    delete this.data.timers[taskId];
                 }
-                task.completed = true;  // 保持复选框选中状态
             }
             
-            await this.saveData();
-            const taskList = this.contentEl.querySelector('.task-list');
-            if (taskList instanceof HTMLElement) {
-                this.renderTasks(taskList);
+            // 更新当天记录文件
+            if (await this.app.vault.adapter.exists(recordPath)) {
+                const recordFile = this.app.vault.getAbstractFileByPath(recordPath) as TFile;
+                if (recordFile instanceof TFile) {
+                    const frontmatterUpdate = {
+                        status: task.type === 'checkin' ? '已打卡' : '已完成',
+                        completed_at: completedTime,
+                        today_end: moment().format('HH:mm:ss')
+                    };
+                    await this.updateFileFrontmatter(recordFile, frontmatterUpdate);
+                }
             }
-            this.createStatsSection();
+
+            // 更新 README 文件
+            if (await this.app.vault.adapter.exists(readmePath)) {
+                const readmeFile = this.app.vault.getAbstractFileByPath(readmePath) as TFile;
+                if (readmeFile instanceof TFile) {
+                    const frontmatterUpdate = {
+                        status: task.type === 'checkin' ? '已打卡' : '已完成',
+                        completed_at: completedTime,
+                        actual_end: completedTime,
+                        total_time_spent: this.formatTime(task.totalTimeSpent || 0)
+                    };
+                    await this.updateFileFrontmatter(readmeFile, frontmatterUpdate);
+                }
+            }
         } else {
-            // 非打卡任务
-            task.completed = !task.completed;
-            const now = Date.now();
+            // 取消完成状态
+            delete task.completedAt;
             
-            if (task.completed) {
-                task.completedBy = this.data.currentUserId;
-                task.completedAt = now;
-                
-                // 重置计时器状态
-                if (task.isTimerRunning) {
-                    task.isTimerRunning = false;
-                    const elapsed = now - (task.timerStartTime || 0);
-                    task.timeSpent = (task.timeSpent || 0) + Math.floor(elapsed / 1000);
-                    delete task.timerStartTime;
+            // 更新当天记录文件
+            if (await this.app.vault.adapter.exists(recordPath)) {
+                const recordFile = this.app.vault.getAbstractFileByPath(recordPath) as TFile;
+                if (recordFile instanceof TFile) {
+                    const frontmatterUpdate = {
+                        status: '进行中',
+                        completed_at: '',
+                        today_end: ''
+                    };
+                    await this.updateFileFrontmatter(recordFile, frontmatterUpdate);
                 }
-
-                // 更新笔记并打开
-                const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
-                const filePath = `tasks/${fileName}.md`;
-                
-                // 更新笔记 frontmatter 和时间记录
-                await this.updateNoteFrontmatter(task);
-                await this.updateTaskTimeRecord(task, 'complete');
-                
-                // 打开笔记
-                const file = this.app.vault.getAbstractFileByPath(filePath);
-                if (file instanceof TFile) {
-                    await this.app.workspace.getLeaf().openFile(file);
-                }
-
-                // 添加到完成记录
-                this.completions.push({
-                    taskName: task.title,
-                    reflection: '',
-                    timestamp: now,
-                    startedAt: task.startedAt,
-                    completedAt: now,
-                    timeSpent: task.timeSpent || 0
-                });
-            } else {
-                // 取消完成状态
-                delete task.completedAt;
-                await this.updateNoteFrontmatter(task);
             }
 
-            // 保存数据
-            this.data.completions = this.completions;
-            await this.saveData();
-
-            // 更新界面
-            const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
-            this.renderTasks(taskList);
-            this.createStatsSection();
+            // 更新 README 文件
+            if (await this.app.vault.adapter.exists(readmePath)) {
+                const readmeFile = this.app.vault.getAbstractFileByPath(readmePath) as TFile;
+                if (readmeFile instanceof TFile) {
+                    const frontmatterUpdate = {
+                        status: '进行中',
+                        completed_at: '',
+                        actual_end: ''
+                    };
+                    await this.updateFileFrontmatter(readmeFile, frontmatterUpdate);
+                }
+            }
         }
+
+        // 保存数据并更新界面
+        await this.saveData();
+        const taskList = this.contentEl.querySelector('.task-list') as HTMLElement;
+        if (taskList) {
+            this.renderTasks(taskList);
+        }
+        this.createStatsSection();
     }
 
+    // 辅助方法：更新文件的 frontmatter
+    private async updateFileFrontmatter(file: TFile, updates: Record<string, string>) {
+        const content = await this.app.vault.read(file);
+        const frontmatterRegex = /---([\s\S]*?)---/;
+        const frontmatterMatch = content.match(frontmatterRegex);
+        
+        if (frontmatterMatch) {
+            const currentFrontmatter = frontmatterMatch[1].trim();  // 先清理现有的多余空行
+            const updatedFrontmatter = Object.entries(updates).reduce(
+                (acc, [key, value]) => {
+                    const regex = new RegExp(`${key}:.*(\r?\n|\n|$)`, 'g');
+                    if (acc.match(regex)) {
+                        return acc.replace(regex, `${key}: ${value}\n`);
+                    }
+                    return acc + `${key}: ${value}\n`;
+                },
+                currentFrontmatter + '\n'  // 确保现有内容后有换行符
+            );
+            
+            // 确保 frontmatter 前后都有换行符，并去除多余的空行
+            const newContent = content.replace(
+                frontmatterRegex, 
+                `---\n${updatedFrontmatter.trim()}\n---\n`
+            );
+            
+            await this.app.vault.modify(file, newContent);
+        }
+    }
+    // 待修改：打卡记录更新 
     private async updateCheckinNoteFrontmatter(task: Task, filePath: string) {
         try {
             if (await this.app.vault.adapter.exists(filePath)) {
@@ -1301,6 +1319,7 @@ export class TaskBoardView extends ItemView {
             new Notice('更新打卡记录 frontmatter 失败');
         }
     }
+    // 待修改：打卡记录生成
 
     private async completeCheckinTask(task: Task, content: string) {
         const today = moment().format('YYYY-MM-DD');
@@ -1366,7 +1385,7 @@ export class TaskBoardView extends ItemView {
     private async resetTimer(taskId: string) {
         const task = this.data.tasks.find(t => t.id === taskId);
         if (!task) return;
-    
+
         // 停止计时器（如果正在运行）
         if (task.isTimerRunning) {
             task.isTimerRunning = false;
@@ -1375,17 +1394,52 @@ export class TaskBoardView extends ItemView {
                 delete this.data.timers[taskId];
             }
         }
-    
+
         // 重置所有时间相关属性
         task.timeSpent = 0;
         task.totalTimeSpent = 0;
         task.timeRecords = [];  // 清空所有时间记录
         delete task.timerStartTime;
         delete task.actualStartTime;
-    
-        // 更新笔记的 frontmatter
-        await this.updateNoteFrontmatter(task);
-        
+
+        // 立即更新文件内容
+        const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        const today = moment().format('YYYY-MM-DD');
+        const recordFileName = `${task.title}-${today}`.replace(/[\\/:*?"<>|]/g, '');
+        const recordPath = `tasks/${fileName}/${task.type === 'checkin' ? '打卡记录' : '进展记录'}/${recordFileName}.md`;
+
+        if (await this.app.vault.adapter.exists(recordPath)) {
+            const file = this.app.vault.getAbstractFileByPath(recordPath) as TFile;
+            if (file instanceof TFile) {
+                let content = await this.app.vault.read(file);
+                const frontmatterRegex = /---([\s\S]*?)---/;
+                const frontmatterMatch = content.match(frontmatterRegex);
+                
+                if (frontmatterMatch) {
+                    const frontmatterUpdate = {
+                        daily_time_spent: '00:00:00',
+                        today_start: '',
+                        today_end: '',
+                        status: '进行中'
+                    };
+
+                    const updatedFrontmatter = Object.entries(frontmatterUpdate).reduce(
+                        (acc, [key, value]) => {
+                            const regex = new RegExp(`${key}:.*(\r?\n|\n|$)`, 'g');
+                            if (acc.match(regex)) {
+                                return acc.replace(regex, `${key}: ${value}\n`);
+                            }
+                            return acc + `${key}: ${value}\n`;
+                        },
+                        frontmatterMatch[1].trim() + '\n'
+                    );
+
+                    content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---\n`);
+                    await this.app.vault.modify(file, content);
+                }
+            }
+        }
+
         // 更新界面显示
         const taskEl = this.contentEl.querySelector(`[data-task-id="${taskId}"]`);
         if (taskEl) {
@@ -1399,8 +1453,13 @@ export class TaskBoardView extends ItemView {
                 timerBtn.classList.remove('running');
             }
         }
-    
+
         await this.saveData();
+        
+        // 更新主界面统计区域
+        this.createStatsSection();
+        this.renderTasks(this.contentEl.querySelector('.task-list') as HTMLElement);
+        
         new Notice('已重置任务时间');
     }
 
@@ -1424,7 +1483,7 @@ export class TaskBoardView extends ItemView {
 
     
 
-    // 创建今日总结
+    // 待修改：创建今日总结
     private async createDailySummary() {
         // 生成带图表的总结内容
         const content = this.generateSummaryContent();
@@ -1451,11 +1510,11 @@ export class TaskBoardView extends ItemView {
 
     private generateSummaryContent(): string {
         const now = moment();
-        const today = now.format('YYYY-MM-DD');
+        const noteDate = now.format('YYYY-MM-DD');
         
         const frontmatter = {
-            title: `${today} 任务总结`,
-            date: today,
+            title: `${noteDate} 任务总结`,
+            date: noteDate,
             type: 'daily',
             tags: ['任务', '日记']
         };
@@ -1465,71 +1524,93 @@ export class TaskBoardView extends ItemView {
             yaml.dump(frontmatter),
             '---',
             '',
-            '## 📊 今日任务仪表盘',
+            '## 📊 任务仪表盘',
             `> 更新时间：${now.format('YYYY-MM-DD HH:mm:ss')}`,
             '',
-            '### 📅 今日计划',
+            '### 📝 今日待办',
             '```dataview',
             'TABLE WITHOUT ID',
-            '  title as "任务",',
-            '  type as "类型",',
-            '  planned_start as "计划开始",',
-            '  due as "计划截止"',
+            '  link(file.path, title) as "任务",',
+            '  category as "分类",',
+            '  priority as "优先级"',
             'FROM "tasks"',
-            `WHERE planned_start = "${today}" OR due = "${today}"`,
-            'SORT file.ctime ASC',
+            'WHERE file.name = "README" and',
+            '  (',
+            '    !completed_at or',
+            '    !planned_start or',
+            '    date(planned_start) <= date(this.file.name) or',
+            '    date(completed_at) = date(this.file.name)',
+            '  )',
+            'SORT priority DESC, file.ctime ASC',
             '```',
             '',
-            '### ⏱️ 今日进行中',
+            '### ⏱️ 今日进展',
             '```dataview',
             'TABLE WITHOUT ID',
-            '  title as "任务",',
+            '  link(file.path, title) as "任务",',
+            '  type as "类型",',
             '  today_start as "开始时间",',
             '  daily_time_spent as "今日用时",',
-            '  total_time_spent as "累计用时"',
+            '  status as "状态"',
             'FROM "tasks"',
-            `WHERE today_start = "${today}" AND status != "已完成"`,
+            'WHERE contains(tags, "打卡记录") or contains(tags, "任务记录")',
+            `  AND date(date) = date("${noteDate}")`,
+            '  AND status = "进行中"',
             'SORT today_start DESC',
             '```',
             '',
             '### ✅ 今日完成',
             '```dataview',
             'TABLE WITHOUT ID',
-            '  title as "任务",',
+            '  link(file.path, title) as "任务",',
+            '  type as "类型",',
             '  today_start as "开始时间",',
             '  completed_at as "完成时间",',
-            '  daily_time_spent as "用时",',
-            '  total_time_spent as "累计用时"',
+            '  daily_time_spent as "用时"',
             'FROM "tasks"',
-            `WHERE completed_at = "${today}"`,
+            'WHERE contains(tags, "打卡记录") or contains(tags, "任务记录")',
+            `  AND date(date) = date("${noteDate}")`,
+            '  AND (status = "已完成" OR status = "已打卡")',
             'SORT completed_at DESC',
             '```',
             '',
             '### 📊 统计概览',
             '```dataviewjs',
-            'const tasks = dv.pages(\'#任务\')',
-            `  .where(p => p.today_start == "${today}" || p.completed_at == "${today}");`,
+            'const allTasks = dv.pages(\'"tasks"\')',
+            '  .where(p => (p.tags?.includes("打卡记录") || p.tags?.includes("任务记录"))',
+            `    && dv.date(p.date)?.toFormat("yyyy-MM-dd") == "${noteDate}");`,
             '',
-            'const planned = dv.pages(\'#任务\')',
-            `  .where(p => p.planned_start == "${today}" || p.due == "${today}");`,
-            '',
-            'const completed = tasks.where(p => p.completed_at == "${today}");',
+            'const completed = allTasks.where(p => p.status == "已完成" || p.status == "已打卡");',
             '',
             'dv.header(4, "🎯 任务情况");',
-            'dv.paragraph(`- 计划任务：${planned.length} 个`);',
-            'dv.paragraph(`- 进行中：${tasks.length - completed.length} 个`);',
+            'dv.paragraph(`- 总任务数：${allTasks.length} 个`);',
+            'dv.paragraph(`- 进行中：${allTasks.length - completed.length} 个`);',
             'dv.paragraph(`- 已完成：${completed.length} 个`);',
             '',
-            'const totalTime = tasks',
+            'const totalTime = allTasks',
             '  .array()',
-            '  .reduce((sum, task) => sum + (task.daily_time_spent || 0), 0);',
-            'dv.paragraph(`- 今日总用时：${totalTime} 分钟`);',
+            '  .reduce((sum, task) => {',
+            '    const timeStr = task.daily_time_spent;',
+            '    if (!timeStr) return sum;',
+            '    const [h, m, s] = timeStr.split(":");',
+            '    return sum + (+h * 3600 + +m * 60 + +s);',
+            '  }, 0);',
+            '',
+            'const formatTime = (seconds) => {',
+            '  const h = Math.floor(seconds / 3600);',
+            '  const m = Math.floor((seconds % 3600) / 60);',
+            '  const s = seconds % 60;',
+            '  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;',
+            '};',
+            '',
+            'dv.paragraph(`- 今日总用时：${formatTime(totalTime)}`);',
             '```',
             '',
             '### 📈 分类统计',
             '```dataviewjs',
-            'const allTasks = dv.pages(\'#任务\')',
-            `  .where(p => p.today_start == "${today}" || p.completed_at == "${today}");`,
+            'const allTasks = dv.pages(\'"tasks"\')',
+            '  .where(p => (p.tags?.includes("打卡记录") || p.tags?.includes("任务记录"))',
+            `    && dv.date(p.date)?.toFormat("yyyy-MM-dd") == "${noteDate}");`,
             '',
             'const categories = {};',
             'allTasks.array().forEach(task => {',
@@ -1542,15 +1623,26 @@ export class TaskBoardView extends ItemView {
             '    };',
             '  }',
             '  categories[category].total++;',
-            '  if (task.completed_at) categories[category].completed++;',
-            '  categories[category].timeSpent += task.daily_time_spent || 0;',
+            '  if (task.status == "已完成" || task.status == "已打卡") categories[category].completed++;',
+            '  const timeStr = task.daily_time_spent;',
+            '  if (timeStr) {',
+            '    const [h, m, s] = timeStr.split(":");',
+            '    categories[category].timeSpent += (+h * 3600 + +m * 60 + +s);',
+            '  }',
             '});',
+            '',
+            'const formatTime = (seconds) => {',
+            '  const h = Math.floor(seconds / 3600);',
+            '  const m = Math.floor((seconds % 3600) / 60);',
+            '  const s = seconds % 60;',
+            '  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;',
+            '};',
             '',
             'for (const [category, stats] of Object.entries(categories)) {',
             '  dv.header(4, category);',
             '  dv.paragraph(`- 总数：${stats.total}`);',
             '  dv.paragraph(`- 已完成：${stats.completed}`);',
-            '  dv.paragraph(`- 用时：${stats.timeSpent} 分钟`);',
+            '  dv.paragraph(`- 用时：${formatTime(stats.timeSpent)}`);',
             '}',
             '```'
         ].join('\n');
@@ -1639,62 +1731,59 @@ export class TaskBoardView extends ItemView {
         if (!task) return;
 
         const fileName = taskTitle.replace(/[\\/:*?"<>|]/g, '');
-        const filePath = task.type === 'checkin' 
-            ? `tasks/${fileName}/README.md`
-            : `tasks/${fileName}.md`;
         
+        
+        // 尝试打开今天的记录文件
+        
+        const readmePath = `tasks/${fileName}/README.md`;
+
         try {
-            // 如果是打卡任务，创建相应的文件夹结构
-            if (task.type === 'checkin') {
-                const taskFolder = `tasks/${fileName}`;
-                const checkinFolder = `${taskFolder}/打卡记录`;
-                
-                if (!await this.app.vault.adapter.exists(taskFolder)) {
-                    await this.app.vault.createFolder(taskFolder);
-                }
-                if (!await this.app.vault.adapter.exists(checkinFolder)) {
-                    await this.app.vault.createFolder(checkinFolder);
-                }
+            let fileToOpen: TFile | null = null;
+
+             if (await this.app.vault.adapter.exists(readmePath)) {
+                fileToOpen = this.app.vault.getAbstractFileByPath(readmePath) as TFile;
             }
 
-            // 创建或打开笔记
-            let file: TFile;
-            if (!await this.app.vault.adapter.exists(filePath)) {
-                const content = task.type === 'checkin' 
-                    ? this.generateCheckinTaskContent(task)
-                    : this.generateNormalTaskContent(task);
-                
-                file = await this.app.vault.create(filePath, content);
+            if (fileToOpen) {
+                await this.app.workspace.getLeaf().openFile(fileToOpen);
             } else {
-                file = this.app.vault.getAbstractFileByPath(filePath) as TFile;
+                new Notice('未找到相关笔记');
             }
-
-            await this.app.workspace.getLeaf().openFile(file);
         } catch (error) {
-            console.error('Error creating/opening note:', error);
-            new Notice('创建或打开笔记失败');
+            console.error('打开笔记失败:', error);
+            new Notice('打开笔记失败');
         }
     }
 
     private generateCheckinTaskContent(task: Task): string {
         const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        const formatDateOnly = (date: string | undefined) => {
+            if (!date) return '';
+            return moment(date).format('YYYY-MM-DD');
+        };
+    
         return [
             '---',
-            `alias: ${task.title}`,
-            `type: checkin-task`,
+            `title: ${task.title}`,
+            'type: checkin',
             `category: ${task.category || '其他'}`,
-            'tags:',
-            '  - 打卡任务',
-            `  - ${task.category || '其他'}`,
-            '---',
-            '',
-            `# ${task.title} - 打卡任务`,
+            `priority: ${task.priority || 'NONE'}`,
+            `planned_start: ${formatDateOnly(task.startDate)}`,
+            `planned_end: ${formatDateOnly(task.dueDate)}`,
+            `total_time_spent: ${this.formatTime(task.totalTimeSpent)}`,
+            `status: ${task.completed ? '已完成' : (task.startedAt ? '进行中' : '未开始')}`,
+        'tags:',
+        '  - 打卡',
+        `  - ${task.category || '其他'}`,
+        '---',
+        '',
+        `# ${task.title}`,
             '',
             '## 任务说明',
             '',
             '## 打卡记录',
             '```dataview',
-            'TABLE date as 日期, time as 完成时间',
+            'TABLE date as 日期, completed_at as 完成时间',
             `FROM "tasks/${fileName}/打卡记录"`,
             'SORT date DESC',
             '```',
@@ -1725,76 +1814,142 @@ export class TaskBoardView extends ItemView {
         ].join('\n');
     }
 
+    // 新增：生成进展记录内容的方法
+        private generateTaskRecordContent(task: Task, date: string): string {
+            return [
+                '---',
+                `title: ${task.title} - ${date} 进展`,
+                'type: task-record',
+                `task_title: ${task.title}`,
+                `category: ${task.category || '其他'}`,
+                `priority: ${task.priority || 'NONE'}`,
+                `planned_start: ${task.startDate || ''}`,
+                `planned_end: ${task.dueDate || ''}`,
+                `date: ${date}`,
+                `today_start: ${task.startedAt || ''}`,
+                `completed_at: ${task.completedAt || ''}`,
+                `daily_time_spent: ${this.formatTime(task.timeSpent)}`,
+                `status: ${task.completed ? '已完成' : '进行中'}`,
+                'tags:',
+                '  - 任务记录',
+                `  - ${task.category || '其他'}`,
+                ...(task.isUrgent ? ['  - 紧急'] : []),
+                ...(task.isImportant ? ['  - 重要'] : []),
+                '---',
+                '',
+                `# ${task.title} - ${date} 进展`,
+                '',
+                '## 今日进展',
+                '',
+                '## 遇到的问题',
+                '',
+                '## 解决方案',
+                '',
+            ].join('\n');
+        }
+
+    // 新增：生成打卡记录内容的方法
+    private generateCheckinRecordContent(task: Task, date: string): string {
+        return [
+            '---',
+            `title: ${task.title} - ${date} 打卡`,
+            'type: checkin-record',
+            `task_title: ${task.title}`,
+            `category: ${task.category || '其他'}`,
+            `priority: ${task.priority || 'NONE'}`,
+            `planned_start: ${task.startDate || ''}`,
+            `planned_end: ${task.dueDate || ''}`,
+            `date: ${date}`,
+            `today_start: ${task.startedAt || ''}`,
+            `completed_at: ${task.completedAt || ''}`,
+            `daily_time_spent: ${this.formatTime(task.timeSpent)}`,
+            `status: ${task.completed ? '已打卡' : '未打卡'}`,
+            'tags:',
+            '  - 打卡记录',
+            `  - ${task.category || '其他'}`,
+            '---',
+            '',
+            `# ${task.title} - ${date} 打卡`,
+            '',
+            '## 打卡内容',
+            '',
+            '## 今日感想',
+            '',
+        ].join('\n');
+    }
+
     // 添加更新笔记 frontmatter 的方法
     private async updateNoteFrontmatter(task: Task) {
+        // 更新当天记录文件
         const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
-        const filePath = `tasks/${fileName}.md`;
         const today = moment().format('YYYY-MM-DD');
-        const todayRecord = task.timeRecords.find(r => r.date === today);
+        const recordFileName = `${task.title}-${today}`.replace(/[\\/:*?"<>|]/g, '');
+        const recordPath = `tasks/${fileName}/${task.type === 'checkin' ? '打卡记录' : '进展记录'}/${recordFileName}.md`;
+        const readmePath = `tasks/${fileName}/README.md`;
 
         try {
-            if (await this.app.vault.adapter.exists(filePath)) {
-                const file = this.app.vault.getAbstractFileByPath(filePath);
+            // 更新当天记录文件
+            if (await this.app.vault.adapter.exists(recordPath)) {
+                const file = this.app.vault.getAbstractFileByPath(recordPath);
                 if (file instanceof TFile) {
-                    const content = await this.app.vault.read(file);
+                    let content = await this.app.vault.read(file);
+                    const frontmatterRegex = /---([\s\S]*?)---/;
+                    const frontmatterMatch = content.match(frontmatterRegex);
                     
-                    // 更新 frontmatter
-                    const newFrontmatter = [
-                        '---',                
-                        `title: ${task.title}`,
-                        `status: ${task.completed ? '已完成' : '进行中'}`,
-                        `created: ${moment(file.stat.ctime).format('YYYY-MM-DD')}`,
-                        `planned_start: ${task.startDate ? moment(task.startDate).format('YYYY-MM-DD HH:mm:ss') : ''}`,
-                        `actual_start: ${task.actualStartTime ? moment(task.actualStartTime).format('YYYY-MM-DD HH:mm:ss') : ''}`,
-                        `today_start: ${todayRecord?.startTime ? moment(todayRecord.startTime).format('YYYY-MM-DD HH:mm:ss') : ''}`,
-                        `completed_at: ${task.completedAt ? moment(task.completedAt).format('YYYY-MM-DD HH:mm:ss') : ''}`,
-                        `daily_time_spent: ${todayRecord ? this.formatTime(todayRecord.dailyTimeSpent) : '00:00:00'}`,
-                        `total_time_spent: ${this.formatTime(task.totalTimeSpent)}`,
-                        `due: ${task.dueDate ? moment(task.dueDate).format('YYYY-MM-DD HH:mm:ss') : ''}`,
-                        'tags:',
-                        '  - 任务',
-                        ...(task.isUrgent ? ['  - 紧急'] : []),
-                        ...(task.isImportant ? ['  - 重要'] : []),
-                        '---'
-                    ].join('\n');
+                    if (frontmatterMatch) {
+                        const currentFrontmatter = frontmatterMatch[1].trim();
+                        const todayRecord = task.timeRecords?.find(r => r.date === today);
+                        
+                        const frontmatterUpdate = {
+                            daily_time_spent: this.formatTime(todayRecord?.dailyTimeSpent || 0),
+                            status: task.completed ? (task.type === 'checkin' ? '已打卡' : '已完成') : '进行中'
+                        };
 
-                    // 生成时间记录内容
-                    const timeRecordContent = [
-                        '## 时间记录',
-                        `- 任务开始时间：${task.actualStartTime ? moment(task.actualStartTime).format('YYYY-MM-DD HH:mm:ss') : '未开始'}`,
-                        '',
-                        '### 每日记录',
-                        ...task.timeRecords.map(record => [
-                            `#### ${record.date}`,
-                            `- 开始时间：${moment(record.startTime).format('HH:mm:ss')}`,
-                            '- 持续时间段：',
-                            ...record.pauseTimes.map((period, index) => 
-                                `  ${index + 1}. ${moment(period.start).format('HH:mm:ss')} - ${moment(period.end).format('HH:mm:ss')}`
-                            ),
-                            `- 当日用时：${this.formatTime(record.dailyTimeSpent)}`,
-                            ''
-                        ].join('\n')),
-                        `- 累计用时：${this.formatTime(task.totalTimeSpent)}`,
-                        ''
-                    ].join('\n');
+                        const updatedFrontmatter = Object.entries(frontmatterUpdate).reduce(
+                            (acc, [key, value]) => {
+                                const regex = new RegExp(`${key}:.*(\r?\n|\n|$)`, 'g');
+                                if (acc.match(regex)) {
+                                    return acc.replace(regex, `${key}: ${value}\n`);
+                                }
+                                return acc + `${key}: ${value}\n`;
+                            },
+                            currentFrontmatter + '\n'
+                        );
 
-                    // 替换或添加时间记录部分
-                    let newContent = content.replace(/---[\s\S]*?---/, newFrontmatter);
-                    const timeRecordRegex = /## 时间记录[\s\S]*?(?=\n## |$)/;
-                    if (timeRecordRegex.test(newContent)) {
-                        newContent = newContent.replace(timeRecordRegex, timeRecordContent);
-                    } else {
-                        // 在任务描述后添加时间记录
-                        const taskDescriptionRegex = /## 任务描述\n/;
-                        if (taskDescriptionRegex.test(newContent)) {
-                            newContent = newContent.replace(
-                                taskDescriptionRegex,
-                                `## 任务描述\n\n${timeRecordContent}`
-                            );
-                        }
+                        content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---\n`);
+                        await this.app.vault.modify(file, content);
                     }
+                }
+            }
 
-                    await this.app.vault.modify(file, newContent);
+            // 更新 README 文件
+            if (await this.app.vault.adapter.exists(readmePath)) {
+                const readmeFile = this.app.vault.getAbstractFileByPath(readmePath) as TFile;
+                if (readmeFile instanceof TFile) {
+                    let content = await this.app.vault.read(readmeFile);
+                    const frontmatterRegex = /---([\s\S]*?)---/;
+                    const frontmatterMatch = content.match(frontmatterRegex);
+                    
+                    if (frontmatterMatch) {
+                        const frontmatterUpdate = {
+                            total_time_spent: this.formatTime(task.totalTimeSpent || 0),
+                            status: task.completed ? '已完成' : (task.startedAt ? '进行中' : '未开始')
+                        };
+
+                        const updatedFrontmatter = Object.entries(frontmatterUpdate).reduce(
+                            (acc, [key, value]) => {
+                                const regex = new RegExp(`${key}:.*(\r?\n|\n|$)`, 'g');
+                                if (acc.match(regex)) {
+                                    return acc.replace(regex, `${key}: ${value}\n`);
+                                }
+                                return acc + `${key}: ${value}\n`;
+                            },
+                            frontmatterMatch[1].trim() + '\n'
+                        );
+
+                        content = content.replace(frontmatterRegex, `---\n${updatedFrontmatter.trim()}\n---\n`);
+                        await this.app.vault.modify(readmeFile, content);
+                    }
                 }
             }
         } catch (error) {
@@ -1875,27 +2030,21 @@ export class TaskBoardView extends ItemView {
     }
 
     private generateNormalTaskContent(task: Task): string {
-        // 辅助函数：格式化日期时间，支持只有日期的情况
-        const formatDateTime = (timestamp: string | number | undefined) => {
-            if (!timestamp) return '';
-            const m = moment(timestamp);
-            // 如果时间部分都是0或者时间部分不存在，说明只设置了日期
-            if (typeof timestamp === 'string' && !timestamp.includes(':') || 
-                (m.hour() === 0 && m.minute() === 0 && m.second() === 0)) {
-                return m.format('YYYY-MM-DD');
-            }
-            return m.format('YYYY-MM-DD HH:mm:ss');
+        const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        const formatDateOnly = (date: string | undefined) => {
+            if (!date) return '';
+            return moment(date).format('YYYY-MM-DD');
         };
-
         return [
             '---',
-            `alias: ${task.title}`,
-            'status: 进行中',
-            `created: ${moment().format('YYYY-MM-DD')}`,
-            `planned_start: ${formatDateTime(task.startDate)}`,
-            `due: ${formatDateTime(task.dueDate)}`,
-            `actual_start: ${formatDateTime(task.startedAt)}`,
-            `progress: ${task.timeSpent > 0 ? Math.floor((task.timeSpent / 3600) * 100) : ''}`,
+            `title: ${task.title}`,
+            'type: task',
+            `category: ${task.category || '其他'}`,
+            `priority: ${task.priority || 'NONE'}`,
+            `planned_start: ${formatDateOnly(task.startDate)}`,
+            `planned_end: ${formatDateOnly(task.dueDate)}`,
+            `total_time_spent: ${this.formatTime(task.totalTimeSpent || 0)}`,
+            `status: ${task.completed ? '已完成' : (task.startedAt ? '进行中' : '未开始')}`,
             'tags:',
             '  - 任务',
             `  - ${task.category || '其他'}`,
@@ -1905,9 +2054,58 @@ export class TaskBoardView extends ItemView {
             '',
             `# ${task.title}`,
             '',
-            '## 任务描述',
+            '## 任务说明',
             '',
-            '## 完成情况记录',
+            '## 进展记录',
+            '```dataview',
+            'TABLE WITHOUT ID',
+            '  link(file.path, dateformat(date, "yyyy-MM-dd")) as "日期",',  // 添加文件链接
+            '  today_start as "开始时间",',
+            '  today_end as "结束时间",',
+            '  daily_time_spent as "当日用时"',
+            `FROM "tasks/${fileName}/进展记录"`,
+            'SORT date DESC',
+            '```',
+            '',
+            '## 统计分析',
+            '### 工作频率',
+            '```dataview',
+            'CALENDAR date',
+            `FROM "tasks/${fileName}/进展记录"`,
+            '```',
+            '',
+            '### 时间统计',
+            '```dataview',
+            'TABLE',
+            '  min(date) as 开始日期,',
+            '  max(date) as 最后日期,',
+            '  length(rows) as 工作天数,',
+            '  sum(dur(daily_time_spent)) as 总用时',
+            `FROM "tasks/${fileName}/进展记录"`,
+            'GROUP BY dateformat(date, "yyyy-MM") as 月份',
+            'SORT 月份 DESC',
+            '```',
+            '',
+            '### 总体统计',
+            '```dataview',
+            'TABLE WITHOUT ID',
+            '  min(date) as "首次开始",',
+            '  max(date) as "最后更新",',
+            '  length(rows) as "总工作天数",',
+            '  sum(dur(daily_time_spent)) as "累计用时"',
+            `FROM "tasks/${fileName}/进展记录"`,
+            '```',
+            '',
+            '### 最近进展',
+            '```dataview',
+            'LIST WITHOUT ID',
+            '  "📅 " + dateformat(date, "yyyy-MM-dd") +',
+            '  " ⏰ " + today_start + " → " + today_end +',
+            '  " ⌛ " + daily_time_spent',
+            `FROM "tasks/${fileName}/进展记录"`,
+            'SORT date DESC',
+            'LIMIT 5',
+            '```',
             '',
             '## 相关资料',
             ''
@@ -2009,66 +2207,123 @@ export class TaskBoardView extends ItemView {
     }
 
     private async updateTaskNoteAfterEdit(task: Task) {
-        // 辅助函数：格式化日期时间，支持只有日期的情况
-        const formatDateTime = (timestamp: string | number | undefined) => {
+        const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        const readmePath = `tasks/${fileName}/README.md`;
+        
+        // 总览页面的格式化函数：只显示日期
+        const formatDateOnly = (timestamp: string | number | undefined) => {
             if (!timestamp) return '';
-            const m = moment(timestamp);
-            // 如果时间部分都是0或者时间部分不存在，说明只设置了日期
-            if (typeof timestamp === 'string' && !timestamp.includes(':') || 
-                (m.hour() === 0 && m.minute() === 0 && m.second() === 0)) {
-                return m.format('YYYY-MM-DD');
-            }
-            return m.format('YYYY-MM-DD HH:mm:ss');
+            return moment(timestamp).format('YYYY-MM-DD');
         };
 
-        const filePath = `tasks/${task.title.replace(/[\\/:*?"<>|]/g, '')}.md`;
-        const file = this.app.vault.getAbstractFileByPath(filePath);
+        // 记录页面的格式化函数：只显示时间
+        const formatTimeOnly = (timestamp: string | number | undefined) => {
+            if (!timestamp) return '';
+            return moment(timestamp).format('HH:mm:ss');
+        };
         
-        if (file instanceof TFile) {
-            const content = await this.app.vault.read(file);
-            
-            // 更新 frontmatter
-            const frontmatter = [
-                '---',
-                `title: ${task.title}`,
-                `status: ${task.completed ? '已完成' : '进行中'}`,
-                `created: ${moment(file.stat.ctime).format('YYYY-MM-DD')}`,
-                `planned_start: ${formatDateTime(task.startDate)}`,
-                `actual_start: ${formatDateTime(task.startedAt)}`,
-                `due: ${formatDateTime(task.dueDate)}`,
-                `progress: ${task.timeSpent > 0 ? Math.floor((task.timeSpent / 3600) * 100) : ''}`,
-                `done: ${formatDateTime(task.completedAt)}`,
-                'tags:',
-                '  - 任务',
-                ...(task.isUrgent ? ['  - 紧急'] : []),
-                ...(task.isImportant ? ['  - 重要'] : []),
-                '---'
-            ].join('\n');
+        try {
+            // 更新总览页面
+            if (await this.app.vault.adapter.exists(readmePath)) {
+                const file = this.app.vault.getAbstractFileByPath(readmePath);
+                if (file instanceof TFile) {
+                    const content = await this.app.vault.read(file);
+                    
+                    // 总览页面的 frontmatter：只显示日期
+                    const frontmatter = [
+                        '---',
+                        `title: ${task.title}`,
+                        `type: ${task.type === 'checkin' ? 'checkin' : 'task'}`,
+                        `category: ${task.category || '其他'}`,
+                        `priority: ${task.priority || 'NONE'}`,
+                        `planned_start: ${formatDateOnly(task.startDate)}`,
+                        `planned_end: ${formatDateOnly(task.dueDate)}`,
+                        `actual_start: ${formatDateOnly(task.startedAt)}`,
+                        `status: ${task.completed ? '已完成' : (task.startedAt ? '进行中' : '未开始')}`,
+                        `progress: ${task.timeSpent > 0 ? Math.floor((task.timeSpent / 3600) * 100) : ''}`,
+                        `completed_at: ${formatDateOnly(task.completedAt)}`,
+                        'tags:',
+                        `  - ${task.type === 'checkin' ? '打卡' : '任务'}`,
+                        `  - ${task.category || '其他'}`,
+                        ...(task.isUrgent ? ['  - 紧急'] : []),
+                        ...(task.isImportant ? ['  - 重要'] : []),
+                        '---'
+                    ].join('\n');
 
-            // 保持原有内容结构，只更新 frontmatter
-            const contentWithoutFrontmatter = content.replace(/---[\s\S]*?---/, '');
-            const updatedContent = frontmatter + contentWithoutFrontmatter;
-            
-            await this.app.vault.modify(file, updatedContent);
-        }
-
-        // 更新相关的完成记录
-        if (task.completed) {
-            this.completions = this.completions.map(completion => {
-                if (completion.taskName === task.title) {
-                    return {
-                        ...completion,
-                        startedAt: task.startDate ? moment(task.startDate).valueOf() : completion.startedAt,
-                        completedAt: task.completedAt || completion.completedAt,
-                        timeSpent: task.timeSpent || completion.timeSpent
-                    };
+                    const contentWithoutFrontmatter = content.replace(/---[\s\S]*?---/, '');
+                    const updatedContent = frontmatter + contentWithoutFrontmatter;
+                    await this.app.vault.modify(file, updatedContent);
                 }
-                return completion;
-            });
+            }
 
-            // 保存更新后的完成记录
-            this.data.completions = this.completions;
-            await this.saveData();
+            // 更新所有记录文件
+            const recordFolder = `tasks/${fileName}/${task.type === 'checkin' ? '打卡记录' : '进展记录'}`;
+            if (await this.app.vault.adapter.exists(recordFolder)) {
+                const folder = this.app.vault.getAbstractFileByPath(recordFolder);
+                if (folder instanceof TFolder) {
+                    const files = folder.children;
+                    for (const file of files) {
+                        if (file instanceof TFile && file.extension === 'md') {
+                            const date = file.basename;
+                            const content = await this.app.vault.read(file);
+                            
+                            // 读取原有的 frontmatter
+                            const frontmatterMatch = content.match(/---([\s\S]*?)---/);
+                            const originalFrontmatter = frontmatterMatch ? frontmatterMatch[1] : '';
+                            const originalFrontmatterLines = originalFrontmatter.split('\n').filter(line => line.trim());
+
+                            // 创建新的 frontmatter，只更新需要更新的属性
+                            const newFrontmatterLines = [
+                                '',
+                                `title: ${task.title} - ${date} ${task.type === 'checkin' ? '打卡' : '进展'}`,
+                                `type: ${task.type === 'checkin' ? 'checkin-record' : 'task-record'}`,
+                                `task_title: ${task.title}`,
+                                `category: ${task.category || '其他'}`,
+                                `priority: ${task.priority || 'NONE'}`,
+                                `date: ${date}`,
+                                `planned_start: ${formatTimeOnly(task.startDate)}`,
+                                `planned_end: ${formatTimeOnly(task.dueDate)}`,
+                                'tags:',
+                                `  - ${task.type === 'checkin' ? '打卡记录' : '任务记录'}`,
+                                `  - ${task.category || '其他'}`,
+                                ...(task.isUrgent ? ['  - 紧急'] : []),
+                                ...(task.isImportant ? ['  - 重要'] : []),
+                            ];
+
+                            // 保留原有的时间相关属性
+                            const timeRelatedProps = [
+                                'actual_start',
+                                'today_start',
+                                'daily_time_spent',
+                                'status'
+                            ];
+
+                            // 从原有 frontmatter 中保留时间相关属性
+                            originalFrontmatterLines.forEach(line => {
+                                const prop = line.split(':')[0]?.trim();
+                                if (timeRelatedProps.includes(prop)) {
+                                    newFrontmatterLines.push(line);
+                                }
+                            });
+
+                            // 组合新的 frontmatter
+                            const newFrontmatter = [
+                                '---',
+                                ...newFrontmatterLines,
+                                '---'
+                            ].join('\n');
+
+                            // 保持原有内容，只更新 frontmatter
+                            const contentWithoutFrontmatter = content.replace(/---[\s\S]*?---/, '');
+                            const updatedContent = newFrontmatter + contentWithoutFrontmatter;
+                            await this.app.vault.modify(file, updatedContent);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('更新任务笔记失败:', error);
+            new Notice('更新任务笔记失败');
         }
     }
 
@@ -2165,6 +2420,39 @@ export class TaskBoardView extends ItemView {
         }
     }
 
+    private async createTaskNote(task: Task) {
+        const fileName = task.title.replace(/[\\/:*?"<>|]/g, '');
+        const taskFolder = `tasks/${fileName}`;
+        const recordFolder = `${taskFolder}/${task.type === 'checkin' ? '打卡记录' : '进展记录'}`;
+        const readmePath = `${taskFolder}/README.md`;
+
+        try {
+            // 创建任务文件夹结构
+            if (!await this.app.vault.adapter.exists(taskFolder)) {
+                await this.app.vault.createFolder(taskFolder);
+            }
+            if (!await this.app.vault.adapter.exists(recordFolder)) {
+                await this.app.vault.createFolder(recordFolder);
+            }
+
+            // 生成并创建任务总览笔记
+            const content = task.type === 'checkin' 
+                ? this.generateCheckinTaskContent(task)
+                : this.generateNormalTaskContent(task);
+            
+            if (!await this.app.vault.adapter.exists(readmePath)) {
+                await this.app.vault.create(readmePath, content);
+            }
+
+            // 打开笔记
+            const file = this.app.vault.getAbstractFileByPath(readmePath) as TFile;
+            await this.app.workspace.getLeaf().openFile(file);
+
+        } catch (error) {
+            console.error('创建任务笔记失败:', error);
+            new Notice('创建任务笔记失败');
+        }
+    }
 
 }
 
