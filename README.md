@@ -54,6 +54,10 @@
 5. 搜索 "Task Board"
 6. 点击安装
 7. 启用插件
+1. 下载最新版本的发布包
+2. 解压到 Obsidian 插件目录：`.obsidian/plugins/`
+3. 在 Obsidian 设置中启用插件
+4. 一些功能需要用到dataview插件，请预先安装
 
 ## 使用说明
 
@@ -97,6 +101,10 @@
 | 打开任务看板 | Ctrl + T | Cmd + T |
 | 添加新任务 | Ctrl + N | Cmd + N |
 | 开始/暂停计时 | Ctrl + Space | Cmd + Space |
+5. 使用计时器追踪任务时间
+6. 使用"今日总结"功能生成日报
+7. 任务计划开始时间、完成时间和提醒时间设置或修改时，请务必输入完成年月日时分，如果不需要具体时间，请输入00:00，打卡任务如果需要每天定时提醒，输入任意日期和具体时间
+8. 在看板页面删除任务不会影响生成的任务相关笔记，如果需要同时删除笔记，请自行删掉对应文件夹，同名任务会放在同一个文件夹里
 
 ## 更新日志
 
@@ -116,12 +124,29 @@
 - [ ] 添加任务模板功能
 - [ ] 支持数据导入导出
 - [ ] 添加国际化支持
+### [0.2.0] - 2025-01-19
+
+#### 新增
+- 任务笔记自动创建功能
+- frontmatter 支持
+- 完成记录同步到笔记
+- 任务笔记模板
+
+#### 修复
+- 修复任务笔记标题重复问题
+- 优化笔记内容结构
+
+## 开发计划
+
+- [ ] 修复导入task插件创建的任务时出现的乱码
+- [ ] 修复开始时间、截止时间、提醒时间设置时必须输入完整年月日时分的问题
+- [ ] 支持任务导出
 
 ## 问题反馈
 
 如果你发现任何问题或有功能建议，欢迎：
-1. 提交 [Issue](https://github.com/yourusername/obsidian-task-board/issues)
-2. 发起 [Pull Request](https://github.com/yourusername/obsidian-task-board/pulls)
+1. 提交 [Issue](https://github.com/lxjthu/obsidian-task-board/issues)
+2. 发起 [Pull Request](https://github.com/lxjthu/obsidian-task-board/pulls)
 
 ## 许可证
 
