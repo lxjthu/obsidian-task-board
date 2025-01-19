@@ -499,10 +499,18 @@ export class TaskBoardView extends ItemView {
             if (task.reminder && task.reminderTime) {
                 const reminderMoment = moment(task.reminderTime);
                 if (task.type === 'checkin') {
-                    // 打卡任务显示每天的提醒时间
+                    // 打卡任务：直接从时间字符串中提取时间部分
+                    let reminderTime = task.reminderTime;
+                    if (task.reminderTime.includes('T')) {
+                        // 如果是完整的日期时间格式，只取时间部分
+                        reminderTime = reminderMoment.format('HH:mm');
+                    } else if (task.reminderTime.includes(':')) {
+                        // 如果只有时间，直接使用
+                        reminderTime = task.reminderTime;
+                    }
                     timeInfoSection.createEl('div', { 
                         cls: 'task-date reminder-date',
-                        text: `提醒：每天 ${reminderMoment.format('HH:mm')}`
+                        text: `提醒：每天 ${reminderTime}`
                     });
                 } else {
                     // 普通任务显示具体的提醒时间
@@ -512,7 +520,6 @@ export class TaskBoardView extends ItemView {
                     });
                 }
             }
-            
             // 计时器
             const timerSection = timeInfoSection.createEl('div', { cls: 'timer-container' });
             const today = moment().format('YYYY-MM-DD');
@@ -2152,8 +2159,50 @@ export class TaskBoardView extends ItemView {
                     const today = now.format('YYYY-MM-DD');
                     const hasRemindedToday = task.lastReminder === today;
 
+                    // 如果任务已完成，不再提醒
+                    if (task.completed) {
+                        return;
+                    }
+
                     if (reminderTime === currentTime && !hasRemindedToday) {
-                        new Notice(`打卡提醒：${task.title} 需要打卡了！`, 10000);
+                        // 创建带有操作按钮的通知
+                        const notice = new Notice(
+                            `打卡提醒：${task.title} 需要打卡了！`,
+                            0  // 设置为0表示不自动关闭
+                        );
+
+                        // 添加操作按钮到通知
+                        const buttonContainer = notice.noticeEl.createDiv('notice-buttons');
+                        
+                        // 开始按钮
+                        const startButton = buttonContainer.createEl('button', { text: '开始打卡' });
+                        startButton.addEventListener('click', async () => {
+                            // 找到对应的时间显示元素
+                            const taskEl = this.contentEl.querySelector(`[data-task-id="${task.id}"]`);
+                            const timeDisplay = taskEl?.querySelector('.time-display') as HTMLElement;
+                            if (timeDisplay) {
+                                await this.toggleTimer(task.id, timeDisplay);
+                            }
+                            notice.hide();
+                        });
+
+                        // 稍后提醒按钮
+                        const remindLaterButton = buttonContainer.createEl('button', { text: '30分钟后提醒' });
+                        remindLaterButton.addEventListener('click', () => {
+                            // 延迟30分钟后再次提醒
+                            task.lastReminder = moment().subtract(30, 'minutes').format('YYYY-MM-DD');
+                            this.saveData();
+                            notice.hide();
+                        });
+
+                        // 关闭提醒按钮
+                        const closeButton = buttonContainer.createEl('button', { text: '关闭提醒' });
+                        closeButton.addEventListener('click', () => {
+                            task.reminder = false;
+                            this.saveData();
+                            notice.hide();
+                        });
+
                         task.lastReminder = today;
                         this.saveData();
                     }
@@ -2161,9 +2210,43 @@ export class TaskBoardView extends ItemView {
                     // 普通任务：比较完整的日期时间
                     const reminderTime = moment(task.reminderTime);
                     if (Math.abs(now.diff(reminderTime, 'minutes')) < 1) {
-                        new Notice(`任务提醒：${task.title} 需要处理了！`, 10000);
-                        task.reminder = false;
-                        this.saveData();
+                        // 创建带有操作按钮的通知
+                        const notice = new Notice(
+                            `任务提醒：${task.title} 需要处理了！`,
+                            0  // 设置为0表示不自动关闭
+                        );
+
+                        // 添加操作按钮到通知
+                        const buttonContainer = notice.noticeEl.createDiv('notice-buttons');
+                        
+                        // 开始按钮
+                        const startButton = buttonContainer.createEl('button', { text: '开始任务' });
+                        startButton.addEventListener('click', async () => {
+                            // 找到对应的时间显示元素
+                            const taskEl = this.contentEl.querySelector(`[data-task-id="${task.id}"]`);
+                            const timeDisplay = taskEl?.querySelector('.time-display') as HTMLElement;
+                            if (timeDisplay) {
+                                await this.toggleTimer(task.id, timeDisplay);
+                            }
+                            notice.hide();
+                        });
+
+                        // 稍后提醒按钮
+                        const remindLaterButton = buttonContainer.createEl('button', { text: '30分钟后提醒' });
+                        remindLaterButton.addEventListener('click', () => {
+                            // 设置30分钟后的新提醒时间
+                            task.reminderTime = moment().add(30, 'minutes').format('YYYY-MM-DDTHH:mm');
+                            this.saveData();
+                            notice.hide();
+                        });
+
+                        // 关闭提醒按钮
+                        const closeButton = buttonContainer.createEl('button', { text: '关闭提醒' });
+                        closeButton.addEventListener('click', () => {
+                            task.reminder = false;
+                            this.saveData();
+                            notice.hide();
+                        });
                     }
                 }
             }

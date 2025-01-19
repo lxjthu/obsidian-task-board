@@ -1,18 +1,29 @@
-# Dependency directories
+# 构建输出
+build/
+dist/
+
+# 开发依赖
 node_modules/
 
-# Build output
-main.js
-*.js.map
+# 开发配置文件
+.eslintrc
+.prettierrc
+tsconfig.json
+package.json
+package-lock.json
+esbuild.config.mjs
+yarn.lock
 
-# Environment files
-.env
-
-# IDE files
-.idea/
-.vscode/
-
-# Debug logs
+# 调试日志
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# IDE 配置
+.vscode/
+.idea/
+*.iml
+
+# 其他
+.DS_Store
