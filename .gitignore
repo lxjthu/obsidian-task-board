@@ -1,11 +1,5 @@
-# 构建输出
-build/
-dist/
-
-# 开发依赖
+# 开发文件
 node_modules/
-
-# 开发配置文件
 .eslintrc
 .prettierrc
 tsconfig.json
@@ -14,16 +8,11 @@ package-lock.json
 esbuild.config.mjs
 yarn.lock
 
-# 调试日志
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# IDE 配置
-.vscode/
-.idea/
-*.iml
+# 源代码（可选是否保留在仓库中）
+src/
+*.ts
+!main.js
 
 # 其他
+*.log
 .DS_Store
