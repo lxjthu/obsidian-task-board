@@ -482,6 +482,15 @@
     color: var(--text-accent);
 }
 
+.reminder-date {
+    color: var(--text-muted);
+}
+
+.reminder-date::before {
+    content: "⏰";
+    margin-right: 4px;
+}
+
 .task-hide-container {
     margin-top: 8px;
     display: flex;

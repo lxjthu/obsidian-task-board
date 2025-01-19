@@ -472,9 +472,10 @@ export class TaskBoardView extends ItemView {
             // 开始时间
             if (task.startDate) {
                 const startMoment = moment(task.startDate);
-                const startTimeFormat = !task.startDate.includes(':') || task.startDate.endsWith('00:00')
-                    ? 'MM-DD'  // 只有日期
-                    : 'MM-DD HH:mm';  // 有具体时间
+                // 修改判断逻辑：如果时间是 00:00 或者没有时间部分，就只显示日期
+                const startTimeFormat = startMoment.format('HH:mm') === '00:00' || !task.startDate.includes('T')
+                    ? 'MM-DD'  // 只显示日期
+                    : 'MM-DD HH:mm';  // 显示日期和时间
                 timeInfoSection.createEl('div', { 
                     cls: 'task-date start-date',
                     text: `开始：${startMoment.format(startTimeFormat)}`
@@ -484,13 +485,32 @@ export class TaskBoardView extends ItemView {
             // 截止时间
             if (task.dueDate) {
                 const dueMoment = moment(task.dueDate);
-                const dueTimeFormat = !task.dueDate.includes(':') || task.dueDate.endsWith('00:00')
-                    ? 'MM-DD'  // 只有日期
-                    : 'MM-DD HH:mm';  // 有具体时间
+                // 同样的逻辑应用于截止时间
+                const dueTimeFormat = dueMoment.format('HH:mm') === '00:00' || !task.dueDate.includes('T')
+                    ? 'MM-DD'  // 只显示日期
+                    : 'MM-DD HH:mm';  // 显示日期和时间
                 timeInfoSection.createEl('div', { 
                     cls: 'task-date due-date',
                     text: `截止：${dueMoment.format(dueTimeFormat)}`
                 });
+            }
+
+            // 添加提醒信息
+            if (task.reminder && task.reminderTime) {
+                const reminderMoment = moment(task.reminderTime);
+                if (task.type === 'checkin') {
+                    // 打卡任务显示每天的提醒时间
+                    timeInfoSection.createEl('div', { 
+                        cls: 'task-date reminder-date',
+                        text: `提醒：每天 ${reminderMoment.format('HH:mm')}`
+                    });
+                } else {
+                    // 普通任务显示具体的提醒时间
+                    timeInfoSection.createEl('div', { 
+                        cls: 'task-date reminder-date',
+                        text: `提醒：${reminderMoment.format('MM-DD HH:mm')}`
+                    });
+                }
             }
             
             // 计时器
@@ -2494,6 +2514,8 @@ class TaskModal extends Modal {
         contentEl.empty();
         contentEl.createEl('h2', { text: '添加新任务' });
 
+        
+ 
         // 任务名称输入
         const inputContainer = contentEl.createDiv('task-input-container');
         inputContainer.createEl('label', { text: '任务名称' });
@@ -2891,6 +2913,10 @@ class EditTaskModal extends Modal {
             });
             this.close();
         });
+    }
+    onClose() {
+        const { contentEl } = this;
+        contentEl.empty();
     }
 }
 
